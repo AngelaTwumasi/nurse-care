@@ -26,6 +26,7 @@ import {
   ClipboardCheck, Loader2, BookOpen, User, BedDouble, AlertTriangle, Lightbulb,
   CheckCircle2, FileUp, StickyNote, X, Download, Copy, Clock, TrendingUp,
   TrendingDown, Minus, Gauge, Siren, Volume2, Square, LayoutGrid,
+  Dumbbell, Apple, UserRound, CalendarClock,
 } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -38,7 +39,10 @@ const CATEGORIES = {
   careplan: { label: 'Care Plan', icon: ClipboardList, color: 'text-teal-600' },
   medication: { label: 'Medications', icon: Pill, color: 'text-fuchsia-600' },
   vitals: { label: 'Vital Signs', icon: Activity, color: 'text-rose-600' },
-  allied_health: { label: 'Allied Health', icon: HeartPulse, color: 'text-indigo-600' },
+  doctor: { label: 'Doctor Notes', icon: UserRound, color: 'text-blue-600' },
+  physiotherapist: { label: 'Physiotherapist', icon: Dumbbell, color: 'text-orange-600' },
+  nutritionist: { label: 'Nutritionist / Dietitian', icon: Apple, color: 'text-green-600' },
+  allied_health: { label: 'Allied Health (other)', icon: HeartPulse, color: 'text-indigo-600' },
   other: { label: 'Other Documents', icon: FileText, color: 'text-slate-600' },
 }
 
@@ -437,11 +441,12 @@ function VitalsTrendChart({ vitals }) {
   )
 }
 
-function VitalsTimeline({ vitals = [], meds = [] }) {
+function VitalsTimeline({ vitals = [], meds = [], care = [] }) {
   const hasVitals = vitals.length > 0
   const hasMeds = meds.length > 0
-  if (!hasVitals && !hasMeds) {
-    return <p className="text-sm text-muted-foreground">No time-stamped vitals or medication times were found in the documents.</p>
+  const hasCare = care.length > 0
+  if (!hasVitals && !hasMeds && !hasCare) {
+    return <p className="text-sm text-muted-foreground">No time-stamped vitals, care tasks or medication times were found in the documents.</p>
   }
   const vitalChip = (label, val) => val ? (
     <span className="inline-flex items-center rounded-md bg-muted px-2 py-0.5 text-xs">
@@ -450,6 +455,27 @@ function VitalsTimeline({ vitals = [], meds = [] }) {
   ) : null
   return (
     <div className="space-y-5">
+      {hasCare && (
+        <div>
+          <h4 className="mb-3 flex items-center gap-2 text-sm font-semibold"><CalendarClock className="h-4 w-4 text-primary" /> Care schedule — when to complete each care</h4>
+          <div className="relative space-y-2 pl-5">
+            <span className="absolute left-1.5 top-1 bottom-1 w-px bg-border" />
+            {care.map((c, i) => {
+              const u = URGENCY[c.priority] || URGENCY.routine
+              return (
+                <div key={i} className="relative">
+                  <span className="absolute -left-[15px] top-2 h-2.5 w-2.5 rounded-full bg-primary ring-4 ring-background" />
+                  <div className="flex items-start gap-2 rounded-lg border bg-card p-2.5">
+                    <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-accent px-2 py-0.5 text-xs font-semibold text-primary"><Clock className="h-3 w-3" /> {c.time || '—'}</span>
+                    <span className="flex-1 text-sm">{c.task}</span>
+                    <Badge variant="outline" className={`shrink-0 ${u.cls}`}>{u.label}</Badge>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
       {hasVitals && <VitalsTrendChart vitals={vitals} />}
       {hasVitals && (
         <div>
@@ -522,7 +548,12 @@ function buildHandoverText(patient, ai) {
   L.push('')
   if ((ai.medications || []).length) {
     L.push('MEDICATIONS')
-    ;(ai.medications || []).forEach((m) => L.push(`• ${m.name} ${m.dose || ''} ${m.route || ''} ${m.notes ? '— ' + m.notes : ''}`))
+    ;(ai.medications || []).forEach((m) => L.push(`• ${m.name} ${m.dose || ''} ${m.route || ''}${(m.times || []).length ? ' @ ' + m.times.join(', ') : ''} ${m.notes ? '— ' + m.notes : ''}`))
+    L.push('')
+  }
+  if ((ai.careSchedule || []).length) {
+    L.push('CARE SCHEDULE')
+    ;(ai.careSchedule || []).forEach((c) => L.push(`[${c.time || ''}] ${c.task}`))
     L.push('')
   }
   if ((ai.redFlags || []).length) {
@@ -569,7 +600,8 @@ function downloadHandoverPDF(patient, ai) {
   <ul>${list(ai.priorities, (p, i) => `<li><span class="badge">${esc((p.urgency || '').toUpperCase())}</span><b>${esc(p.priority)}</b> — ${esc(p.rationale)}</li>`)}</ul>
   <h2>Nursing Interventions</h2>
   <ul>${list(ai.interventions, (it) => `<li><b>${esc(it.intervention)}</b> <i>(${esc(it.frequency || '')})</i> — monitor: ${esc(it.monitoring || '')}</li>`)}</ul>
-  ${(ai.medications || []).length ? `<h2>Medications</h2><ul>${list(ai.medications, (m) => `<li><b>${esc(m.name)}</b> ${esc(m.dose || '')} ${esc(m.route || '')} ${m.notes ? '— ' + esc(m.notes) : ''}</li>`)}</ul>` : ''}
+  ${(ai.medications || []).length ? `<h2>Medications</h2><ul>${list(ai.medications, (m) => `<li><b>${esc(m.name)}</b> ${esc(m.dose || '')} ${esc(m.route || '')} ${(m.times || []).length ? '<i>@ ' + esc((m.times || []).join(', ')) + '</i>' : ''} ${m.notes ? '— ' + esc(m.notes) : ''}</li>`)}</ul>` : ''}
+  ${(ai.careSchedule || []).length ? `<h2>Care Schedule</h2><ul>${list(ai.careSchedule, (c) => `<li><span class="badge">${esc(c.time || '')}</span>${esc(c.task)}</li>`)}</ul>` : ''}
   ${(ai.redFlags || []).length ? `<h2>Red Flags — Escalate</h2><ul>${list(ai.redFlags, (r) => `<li>${esc(r)}</li>`)}</ul>` : ''}
   <div class="foot">${esc(ai.safetyNotice || 'Verify all medications, doses and escalation with your senior/RN.')} · Generated by NurseCare on ${new Date().toLocaleString()}</div>
   </body></html>`
@@ -684,7 +716,7 @@ function AIResults({ ai, patient, generatedAt }) {
         {/* Timeline */}
         <TabsContent value="timeline" className="mt-4">
           <Card><CardContent className="pt-4">
-            <VitalsTimeline vitals={ai.vitalsTimeline} meds={ai.medicationTimes} />
+            <VitalsTimeline vitals={ai.vitalsTimeline} meds={ai.medicationTimes} care={ai.careSchedule} />
           </CardContent></Card>
         </TabsContent>
 
@@ -699,6 +731,14 @@ function AIResults({ ai, patient, generatedAt }) {
                   {m.dose && <Badge variant="secondary">{m.dose}</Badge>}
                   {m.route && <Badge variant="outline">{m.route}</Badge>}
                 </div>
+                {(m.times || []).length > 0 && (
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    <span className="text-xs font-medium text-muted-foreground">Due:</span>
+                    {m.times.map((t, ti) => (
+                      <span key={ti} className="inline-flex items-center gap-1 rounded-md bg-fuchsia-100 px-2 py-0.5 text-xs font-semibold text-fuchsia-700"><Clock className="h-3 w-3" /> {t}</span>
+                    ))}
+                  </div>
+                )}
                 {m.notes && <p className="mt-1 text-sm text-muted-foreground">{m.notes}</p>}
               </CardContent>
             </Card>

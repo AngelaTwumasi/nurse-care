@@ -158,6 +158,12 @@ backend:
         -working: true
         -agent: "testing"
         -comment: "✅ SCHEMA EXTENSION VERIFIED. Created patient 'Timeline Test' with deteriorating vitals (HR 88→118, BP 130/80→92/55, RR 18→28, SpO2 96→89, Temp 37.2→38.6). AI generation completed in 29.0s. ALL base keys (8) + NEW keys (3) present and valid: medicationTimes[] (3 items: Paracetamol 0600/1400, Ceftriaxone 0800), vitalsTimeline[] (3 time-stamped observations), earlyWarning{score:N/A, riskLevel:high, trend:worsening, rationale, escalation}. Trend correctly identified as 'worsening'. All data persisted. Test patient cleaned up."
+        -working: "NA"
+        -agent: "main"
+        -comment: "ROUND 3 schema extension (needs retest): aiOutput must now ALSO include careSchedule[] ({time,task,priority(urgent|soon|routine)}) and each medications[] item must include 'times' array. Test with document containing scheduled nursing tasks and medication times."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ ROUND 3 SCHEMA EXTENSION VERIFIED. Created patient 'Care Sched Test' (75yo, Post-op day 1) with comprehensive care plan document including: Medications with times (Paracetamol 1g PO 0600/1400, Ceftriaxone 1g IV 0800, Enoxaparin 40mg SC 2000), scheduled nursing tasks (hourly neuro obs, 4-hourly vitals, breakfast 0800, mobilise 1030, wound check), and vitals observations (0600 HR 82 BP 128/78, 1000 HR 96 BP 112/70). AI generation completed in 33.0s (REAL Gemini 2.5 Pro). ALL 12 required keys present and valid: 8 base keys + 3 Round 2 keys (medicationTimes, vitalsTimeline, earlyWarning) + NEW careSchedule[] (12 scheduled tasks with time/task/priority structure). ALL 3 medications have 'times' arrays populated correctly (Paracetamol ['0600','1400'], Ceftriaxone ['0800'], Enoxaparin ['2000']). All data persisted correctly. Test patient cleaned up. Backend AI generation with full schema is PRODUCTION-READY."
 
 frontend:
   - task: "Shift dashboard + patient workspace + tutorial"
@@ -207,8 +213,8 @@ frontend:
 
 metadata:
   created_by: "main_agent"
-  version: "1.2"
-  test_sequence: 4
+  version: "1.3"
+  test_sequence: 5
   run_ui: false
 
 test_plan:
@@ -331,3 +337,47 @@ agent_communication:
       - External Pexels image failed (not critical)
       
       NO CRITICAL ISSUES FOUND. All requested features working correctly. Frontend is PRODUCTION-READY.
+    -agent: "main"
+    -message: |
+      ROUND 3 (enhancements) — please RETEST BACKEND generate.
+      Added new document categories (doctor, physiotherapist, nutritionist) — frontend only.
+      AI schema EXTENDED again: aiOutput must now ALSO include:
+        - careSchedule[] : objects { time, task, priority(urgent|soon|routine) } = a time-ordered checklist of WHEN to complete each nursing care.
+        - each medications[] item must include a "times" array (due/administration times).
+      Verify POST /api/patients/:id/generate returns careSchedule[] and medications[].times, plus all previously-tested keys (earlyWarning, vitalsTimeline, medicationTimes, etc). Use a doc with med times, e.g. "Paracetamol 1g PO 0600 & 1400; Ceftriaxone 1g IV 0800; hourly neuro obs; assist with breakfast 0800." Clean up test patients after.
+    -agent: "testing"
+    -message: |
+      ✅ ROUND 3 SCHEMA EXTENSION TEST PASSED
+      
+      Retested AI generation endpoint after Round 3 schema extension. All tests passed:
+      
+      Test scenario:
+      - Created patient "Care Sched Test" (75yo, Post-op day 1, monitoring)
+      - Added comprehensive care plan document with:
+        * Medications with times: Paracetamol 1g PO at 0600/1400, Ceftriaxone 1g IV at 0800, Enoxaparin 40mg SC at 2000
+        * Scheduled nursing tasks: hourly neuro obs, 4-hourly vitals (0600/0800/1000/1400/1800/2200), assist with breakfast at 0800, mobilise with physio at 1030, wound check end of shift
+        * Vitals observations: 0600 (HR 82, BP 128/78, RR 16, SpO2 97%, Temp 36.9), 1000 (HR 96, BP 112/70, RR 20, SpO2 95%, Temp 37.6)
+      
+      Results:
+      ✅ AI generation completed in 33.0 seconds (REAL Gemini 2.5 Pro call)
+      ✅ ALL 12 required keys present and valid:
+         • 8 BASE keys: patientSummary, priorities, interventions, isbar (5 sections), medications, redFlags, newGradTips, safetyNotice
+         • 3 ROUND 2 keys: medicationTimes (4 items), vitalsTimeline (2 items), earlyWarning (score=N/A, riskLevel=medium, trend=worsening)
+         • 1 NEW ROUND 3 key: careSchedule (12 scheduled tasks)
+      
+      ✅ careSchedule[] structure verified:
+         - 12 scheduled tasks with proper structure (time, task, priority)
+         - Sample tasks: "Hourly: Complete neurovascular observations [urgent]", "0800: Administer Ceftriaxone 1g IV [soon]", "0800: Assist with breakfast [routine]"
+         - All priorities valid (urgent/soon/routine)
+      
+      ✅ medications[].times arrays verified:
+         - ALL 3 medications have 'times' arrays populated:
+           * Paracetamol: times=['0600', '1400']
+           * Ceftriaxone: times=['0800']
+           * Enoxaparin: times=['2000']
+         - 3/3 medications (100%) have times arrays
+      
+      ✅ All data persisted correctly via GET /api/patients/:id
+      ✅ Test patient cleaned up successfully
+      
+      Backend AI generation with FULL SCHEMA (Round 3) is PRODUCTION-READY.

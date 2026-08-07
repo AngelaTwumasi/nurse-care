@@ -8,13 +8,18 @@ export const dynamic = 'force-dynamic'
 // ---------- MongoDB ----------
 let client
 let db
+let connecting
 
 async function connectToMongo() {
-  if (!client) {
+  if (db) return db
+  if (!connecting) {
     client = new MongoClient(process.env.MONGO_URL)
-    await client.connect()
-    db = client.db(process.env.DB_NAME)
+    connecting = client.connect().then(() => {
+      db = client.db(process.env.DB_NAME)
+      return db
+    })
   }
+  await connecting
   return db
 }
 
@@ -65,8 +70,9 @@ Return ONLY a valid JSON object (no markdown, no commentary) with EXACTLY this s
   "priorities": [ { "rank": 1, "priority": "short title", "rationale": "why this matters now", "urgency": "urgent" | "soon" | "routine" } ],
   "interventions": [ { "intervention": "what to do", "frequency": "how often / timing", "monitoring": "what to watch for", "rationale": "why" } ],
   "isbar": { "identify": "...", "situation": "...", "background": "...", "assessment": "...", "recommendation": "..." },
-  "medications": [ { "name": "...", "dose": "...", "route": "...", "notes": "timing or nursing considerations" } ],
+  "medications": [ { "name": "...", "dose": "...", "route": "...", "times": ["due/administration times seen or scheduled, e.g. 0800", "1400"], "notes": "timing or nursing considerations" } ],
   "medicationTimes": [ { "time": "e.g. 0800", "medication": "name", "dose": "dose" } ],
+  "careSchedule": [ { "time": "when to complete, e.g. 0800 / hourly / pre-meal / end of shift", "task": "the nursing care or task to complete at this time", "priority": "urgent" | "soon" | "routine" } ],
   "vitalsTimeline": [ { "time": "e.g. 0600 or 07/08 14:00", "hr": "", "bp": "", "rr": "", "spo2": "", "temp": "", "notes": "any observation at this time" } ],
   "earlyWarning": {
     "score": "numeric early warning / MEWS-style score if derivable from vitals, else 'N/A'",

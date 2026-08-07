@@ -214,7 +214,7 @@ frontend:
 metadata:
   created_by: "main_agent"
   version: "1.3"
-  test_sequence: 6
+  test_sequence: 7
   run_ui: false
 
 test_plan:
@@ -596,3 +596,68 @@ agent_communication:
       ✅ No test patients created (2 existing patients were sufficient)
       
       NO CRITICAL ISSUES FOUND. All 4 Round 6 features working correctly. Feature is PRODUCTION-READY.
+
+  - task: "Care checklist persistence (PUT careDone) + reset on regenerate"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "PUT /api/patients/:id now accepts a careDone object and persists it. POST /generate now resets careDone to {} so a fresh plan starts with no ticked tasks. New Obs entry posts a vitals note then regenerates."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ CARE CHECKLIST PERSISTENCE FULLY WORKING. Comprehensive backend test completed. Created patient 'Checklist Test' (70yo, Post-op monitoring) with care plan document containing scheduled tasks (hourly neuro obs, 4-hourly vitals, breakfast 0800, mobilise 1030, wound check) and vitals observations (0600 HR 88 BP 120/70, 1000 HR 104 BP 100/60). (1) AI generation completed in 24.8s (REAL Gemini 2.5 Pro), careSchedule has 7 tasks, careDone is {} (empty) immediately after generate ✅. (2) PUT /api/patients/:id with careDone={'0':true,'2':true} successful, GET verified careDone persisted correctly as {'0':true,'2':true}, patient name 'Checklist Test' and diagnosis 'Post-op, monitoring' unchanged ✅. (3) Regenerated AI care plan (33.6s), GET verified careDone was RESET to {} (empty) after regenerate ✅. (4) All 12 required aiOutput keys present and valid: patientSummary, priorities (3 items), interventions (5 items), isbar (5 sections: identify/situation/background/assessment/recommendation), medications (1 item), medicationTimes (2 items), vitalsTimeline (2 items), careSchedule (9 items), earlyWarning (riskLevel=high, trend=worsening), redFlags (4 items), newGradTips (4 items), safetyNotice ✅. Test patient cleaned up successfully. Patient 'm' preserved as instructed. Backend care checklist persistence is PRODUCTION-READY."
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      ROUND 7 — small BACKEND retest for the care checklist persistence.
+      1) Create a patient; add a text doc (any care plan note with a couple of tasks & vitals).
+      2) POST /api/patients/:id/generate (real Gemini, ~30s). Confirm aiOutput.careSchedule exists AND aiOutput.careDone (on the patient) is {} (empty) right after generate.
+      3) PUT /api/patients/:id with body {"careDone": {"0": true, "2": true}}. Then GET /api/patients/:id and confirm careDone == {"0":true,"2":true} persisted, and name/diagnosis untouched.
+      4) POST /api/patients/:id/generate again and confirm careDone is RESET back to {} (empty) after regenerate.
+      Also confirm all other aiOutput keys still present (priorities, interventions, isbar, medications, medicationTimes, vitalsTimeline, earlyWarning, careSchedule, redFlags, newGradTips, safetyNotice).
+      Cleanup created patients. Do NOT delete patient "m".
+    -agent: "testing"
+    -message: |
+      ✅ ROUND 7 BACKEND TEST COMPLETED - ALL TESTS PASSED
+      
+      Care checklist persistence feature fully verified and working correctly.
+      
+      Test Execution:
+      - Created patient "Checklist Test" (70yo, Post-op monitoring, Bed B1)
+      - Added care plan document with scheduled tasks and vitals observations
+      - AI generation: 24.8s (first), 33.6s (regenerate) - REAL Gemini 2.5 Pro
+      
+      Test Results:
+      
+      1. ✅ INITIAL GENERATE - careDone starts as {}
+         - POST /api/patients/:id/generate completed successfully
+         - careSchedule present with 7 tasks
+         - careDone field is {} (empty) immediately after generate
+      
+      2. ✅ PERSISTENCE - careDone persists via PUT
+         - PUT /api/patients/:id with {"careDone": {"0": true, "2": true}}
+         - GET verified careDone === {"0": true, "2": true}
+         - Patient name and diagnosis unchanged ("Checklist Test" / "Post-op, monitoring")
+      
+      3. ✅ RESET ON REGENERATE - careDone resets to {}
+         - POST /api/patients/:id/generate (second time)
+         - GET verified careDone was RESET to {} (empty)
+      
+      4. ✅ SCHEMA INTEGRITY - All 12 aiOutput keys present
+         - patientSummary, priorities (3), interventions (5)
+         - isbar (5 sections: identify/situation/background/assessment/recommendation)
+         - medications (1), medicationTimes (2), vitalsTimeline (2)
+         - careSchedule (9), earlyWarning (riskLevel=high, trend=worsening)
+         - redFlags (4), newGradTips (4), safetyNotice
+      
+      Cleanup:
+      ✅ Test patient "Checklist Test" deleted successfully
+      ✅ Patient "m" preserved as instructed
+      
+      NO CRITICAL ISSUES FOUND. Care checklist persistence feature is PRODUCTION-READY.

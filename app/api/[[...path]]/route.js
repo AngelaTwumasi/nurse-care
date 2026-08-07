@@ -219,6 +219,7 @@ async function handleRoute(request, { params }) {
           ;['name', 'bed', 'age', 'diagnosis'].forEach((k) => {
             if (body[k] !== undefined) update[k] = body[k]
           })
+          if (body.careDone !== undefined) update.careDone = body.careDone
           await db.collection('patients').updateOne({ id }, { $set: update })
           const updated = await db.collection('patients').findOne({ id })
           const { _id, ...clean } = updated
@@ -271,7 +272,7 @@ async function handleRoute(request, { params }) {
         const generatedAt = new Date()
         await db.collection('patients').updateOne(
           { id },
-          { $set: { aiOutput: result, aiGeneratedAt: generatedAt } }
+          { $set: { aiOutput: result, aiGeneratedAt: generatedAt, careDone: {} } }
         )
         return json({ aiOutput: result, aiGeneratedAt: generatedAt })
       }

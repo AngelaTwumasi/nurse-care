@@ -26,9 +26,10 @@ import {
   ClipboardCheck, Loader2, BookOpen, User, BedDouble, AlertTriangle, Lightbulb,
   CheckCircle2, FileUp, StickyNote, X, Download, Copy, Clock, TrendingUp,
   TrendingDown, Minus, Gauge, Siren, Volume2, Square, LayoutGrid,
-  Dumbbell, Apple, UserRound, CalendarClock, GripVertical, Users,
+  Dumbbell, Apple, UserRound, CalendarClock, GripVertical, Users, ArrowDownWideNarrow,
 } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer, Legend,
 } from 'recharts'
@@ -65,6 +66,21 @@ function fileToDataUrl(file) {
     reader.onerror = reject
     reader.readAsDataURL(file)
   })
+}
+
+function timeAgo(dateStr) {
+  if (!dateStr) return null
+  const s = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000)
+  if (s < 60) return 'just now'
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h ${m % 60}m ago`
+  return `${Math.floor(h / 24)}d ago`
+}
+function isStale(dateStr, hours = 4) {
+  if (!dateStr) return false
+  return Date.now() - new Date(dateStr).getTime() > hours * 3600 * 1000
 }
 
 /* ------------------------ Tutorial ------------------------ */
@@ -291,7 +307,14 @@ function PatientCard({ patient, index, onOpen, onPopulate, generating, onDragSta
         ) : null}
         <Separator className="my-3" />
         <div className="flex items-center justify-between gap-2">
-          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><FileText className="h-3.5 w-3.5" /> {docCount} doc{docCount !== 1 ? 's' : ''}</span>
+          <div className="flex flex-col gap-0.5">
+            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><FileText className="h-3.5 w-3.5" /> {docCount} doc{docCount !== 1 ? 's' : ''}</span>
+            {patient.aiGeneratedAt && (
+              <span className={`inline-flex items-center gap-1 text-[11px] ${isStale(patient.aiGeneratedAt) ? 'font-medium text-amber-600' : 'text-muted-foreground'}`}>
+                <Clock className="h-3 w-3" /> {isStale(patient.aiGeneratedAt) ? 'stale · ' : ''}{timeAgo(patient.aiGeneratedAt)}
+              </span>
+            )}
+          </div>
           <Button
             size="sm"
             variant={hasAI ? 'outline' : 'default'}
@@ -551,10 +574,11 @@ function VitalsTrendChart({ vitals }) {
   )
 }
 
-function VitalsTimeline({ vitals = [], meds = [], care = [] }) {
+function VitalsTimeline({ vitals = [], meds = [], care = [], careDone = {}, onToggleCare }) {
   const hasVitals = vitals.length > 0
   const hasMeds = meds.length > 0
   const hasCare = care.length > 0
+  const doneCount = care.filter((_, i) => careDone?.[i]).length
   if (!hasVitals && !hasMeds && !hasCare) {
     return <p className="text-sm text-muted-foreground">No time-stamped vitals, care tasks or medication times were found in the documents.</p>
   }
@@ -567,17 +591,22 @@ function VitalsTimeline({ vitals = [], meds = [], care = [] }) {
     <div className="space-y-5">
       {hasCare && (
         <div>
-          <h4 className="mb-3 flex items-center gap-2 text-sm font-semibold"><CalendarClock className="h-4 w-4 text-primary" /> Care schedule — when to complete each care</h4>
+          <h4 className="mb-3 flex items-center gap-2 text-sm font-semibold">
+            <CalendarClock className="h-4 w-4 text-primary" /> Care schedule — when to complete each care
+            <span className="ml-auto rounded-full bg-accent px-2 py-0.5 text-xs font-medium text-primary">{doneCount}/{care.length} done</span>
+          </h4>
           <div className="relative space-y-2 pl-5">
             <span className="absolute left-1.5 top-1 bottom-1 w-px bg-border" />
             {care.map((c, i) => {
               const u = URGENCY[c.priority] || URGENCY.routine
+              const done = !!careDone?.[i]
               return (
                 <div key={i} className="relative">
-                  <span className="absolute -left-[15px] top-2 h-2.5 w-2.5 rounded-full bg-primary ring-4 ring-background" />
-                  <div className="flex items-start gap-2 rounded-lg border bg-card p-2.5">
+                  <span className={`absolute -left-[15px] top-2 h-2.5 w-2.5 rounded-full ring-4 ring-background ${done ? 'bg-emerald-500' : 'bg-primary'}`} />
+                  <div className={`flex items-start gap-2 rounded-lg border bg-card p-2.5 transition-opacity ${done ? 'opacity-60' : ''}`}>
+                    {onToggleCare && <Checkbox checked={done} onCheckedChange={() => onToggleCare(i)} className="mt-0.5" />}
                     <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-accent px-2 py-0.5 text-xs font-semibold text-primary"><Clock className="h-3 w-3" /> {c.time || '—'}</span>
-                    <span className="flex-1 text-sm">{c.task}</span>
+                    <span className={`flex-1 text-sm ${done ? 'line-through' : ''}`}>{c.task}</span>
                     <Badge variant="outline" className={`shrink-0 ${u.cls}`}>{u.label}</Badge>
                   </div>
                 </div>
@@ -723,7 +752,7 @@ function downloadHandoverPDF(patient, ai) {
   setTimeout(() => { w.focus(); w.print() }, 500)
 }
 
-function AIResults({ ai, patient, generatedAt }) {
+function AIResults({ ai, patient, generatedAt, careDone, onToggleCare }) {
   const [speaking, setSpeaking] = useState(false)
 
   useEffect(() => () => {
@@ -826,7 +855,7 @@ function AIResults({ ai, patient, generatedAt }) {
         {/* Timeline */}
         <TabsContent value="timeline" className="mt-4">
           <Card><CardContent className="pt-4">
-            <VitalsTimeline vitals={ai.vitalsTimeline} meds={ai.medicationTimes} care={ai.careSchedule} />
+            <VitalsTimeline vitals={ai.vitalsTimeline} meds={ai.medicationTimes} care={ai.careSchedule} careDone={careDone} onToggleCare={onToggleCare} />
           </CardContent></Card>
         </TabsContent>
 
@@ -903,6 +932,58 @@ function AIResults({ ai, patient, generatedAt }) {
 }
 
 /* ------------------------ Patient Detail ------------------------ */
+function NewObsDialog({ onSubmit }) {
+  const [open, setOpen] = useState(false)
+  const [v, setV] = useState({ time: '', hr: '', bp: '', rr: '', spo2: '', temp: '' })
+  const [saving, setSaving] = useState(false)
+  const submit = async () => {
+    const now = v.time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    const parts = []
+    if (v.hr) parts.push(`HR ${v.hr}`)
+    if (v.bp) parts.push(`BP ${v.bp}`)
+    if (v.rr) parts.push(`RR ${v.rr}`)
+    if (v.spo2) parts.push(`SpO2 ${v.spo2}%`)
+    if (v.temp) parts.push(`Temp ${v.temp}`)
+    if (!parts.length) { toast.error('Enter at least one vital'); return }
+    setSaving(true)
+    try {
+      await onSubmit(`Obs ${now}`, `Obs ${now} ${parts.join(' ')}`)
+      setV({ time: '', hr: '', bp: '', rr: '', spo2: '', temp: '' })
+      setOpen(false)
+    } catch (e) { toast.error(e.message) } finally { setSaving(false) }
+  }
+  const field = (key, label, ph) => (
+    <div className="space-y-1.5">
+      <Label className="text-xs">{label}</Label>
+      <Input value={v[key]} onChange={(e) => setV({ ...v, [key]: e.target.value })} placeholder={ph} />
+    </div>
+  )
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant="outline" className="gap-2"><Activity className="h-4 w-4" /> New obs</Button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Record new observations</DialogTitle>
+          <DialogDescription>Enter fresh vitals — NurseCare re-reads them and updates the early-warning score.</DialogDescription>
+        </DialogHeader>
+        <div className="grid grid-cols-2 gap-3">
+          {field('time', 'Time', 'now')}
+          {field('hr', 'Heart rate', 'e.g. 96')}
+          {field('bp', 'Blood pressure', 'e.g. 110/70')}
+          {field('rr', 'Resp rate', 'e.g. 20')}
+          {field('spo2', 'SpO2 %', 'e.g. 94')}
+          {field('temp', 'Temp', 'e.g. 37.8')}
+        </div>
+        <DialogFooter>
+          <Button onClick={submit} disabled={saving} className="gap-2">{saving && <Loader2 className="h-4 w-4 animate-spin" />} Save & refresh</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function PatientDetail({ patient, onBack, refresh, onDelete }) {
   const [busy, setBusy] = useState(false)
   const [generating, setGenerating] = useState(false)
@@ -976,15 +1057,33 @@ function PatientDetail({ patient, onBack, refresh, onDelete }) {
     } catch (e) { toast.error(e.message) }
   }
 
+  const toggleCare = async (idx) => {
+    const done = { ...(patient.careDone || {}) }
+    done[idx] = !done[idx]
+    try {
+      await api(`/patients/${patient.id}`, { method: 'PUT', body: JSON.stringify({ careDone: done }) })
+      await refresh()
+    } catch (e) { toast.error(e.message) }
+  }
+
+  const addObs = async (name, text) => {
+    await api(`/patients/${patient.id}/documents`, { method: 'POST', body: JSON.stringify({ documents: [{ name, category: 'vitals', kind: 'text', textContent: text }] }) })
+    toast.success('Obs added — refreshing warning score')
+    await refresh()
+    generate(true)
+  }
+
   return (
     <div className="space-y-5">
       <DocViewer open={viewerOpen} onOpenChange={setViewerOpen} documents={patient.documents || []} currentIndex={viewIndex} setCurrentIndex={setViewIndex} />
       <div className="flex items-center justify-between">
         <Button variant="ghost" onClick={onBack} className="gap-2 -ml-2"><ArrowLeft className="h-4 w-4" /> Back to shift</Button>
-        <AlertDialog>
-          <AlertDialogTrigger asChild>
-            <Button variant="ghost" className="gap-2 text-muted-foreground hover:text-destructive"><Trash2 className="h-4 w-4" /> Discharge</Button>
-          </AlertDialogTrigger>
+        <div className="flex items-center gap-2">
+          <NewObsDialog onSubmit={addObs} />
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button variant="ghost" className="gap-2 text-muted-foreground hover:text-destructive"><Trash2 className="h-4 w-4" /> Discharge</Button>
+            </AlertDialogTrigger>
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>Discharge {patient.name}?</AlertDialogTitle>
@@ -995,7 +1094,8 @@ function PatientDetail({ patient, onBack, refresh, onDelete }) {
               <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={() => onDelete(patient.id)}>Discharge</AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
-        </AlertDialog>
+          </AlertDialog>
+        </div>
       </div>
 
       {/* Header */}
@@ -1054,7 +1154,7 @@ function PatientDetail({ patient, onBack, refresh, onDelete }) {
             </CardContent></Card>
           )}
 
-          {!generating && patient.aiOutput && <AIResults ai={patient.aiOutput} patient={patient} generatedAt={patient.aiGeneratedAt} />}
+          {!generating && patient.aiOutput && <AIResults ai={patient.aiOutput} patient={patient} generatedAt={patient.aiGeneratedAt} careDone={patient.careDone} onToggleCare={toggleCare} />}
 
           {!generating && !patient.aiOutput && (
             <Card><CardContent className="py-12 text-center">
@@ -1271,6 +1371,16 @@ function App() {
     })
   }
 
+  const sortByRisk = () => {
+    const rank = (p) => { const r = p.aiOutput?.earlyWarning?.riskLevel; return r === 'high' ? 3 : r === 'medium' ? 2 : r === 'low' ? 1 : 0 }
+    setPatients((prev) => {
+      const next = [...prev].sort((a, b) => rank(b) - rank(a))
+      saveOrder(next)
+      return next
+    })
+    toast.success('Sorted by risk — highest first')
+  }
+
   const deletePatient = async (id) => {
     try {
       await api(`/patients/${id}`, { method: 'DELETE' })
@@ -1338,6 +1448,9 @@ function App() {
                 <p className="text-sm text-muted-foreground">{patients.length} of {MAX_PATIENTS} patients · tap a patient to manage documents & generate cares</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                <Button variant="outline" onClick={sortByRisk} className="gap-2" disabled={!patients.some((p) => p.aiOutput)}>
+                  <ArrowDownWideNarrow className="h-4 w-4" /> Sort by risk
+                </Button>
                 <Button variant="outline" onClick={() => downloadHandoverPack(patients)} className="gap-2" disabled={!patients.some((p) => p.aiOutput)}>
                   <Download className="h-4 w-4" /> Handover pack
                 </Button>

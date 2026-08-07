@@ -1528,10 +1528,10 @@ function App() {
                 <p className="text-sm text-muted-foreground">{patients.length} of {MAX_PATIENTS} patients · tap a patient to manage documents & generate cares</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <Button variant="outline" onClick={sortByRisk} className="gap-2" disabled={!patients.some((p) => p.aiOutput)}>
+                <Button variant="outline" onClick={sortByRisk} className="gap-2">
                   <ArrowDownWideNarrow className="h-4 w-4" /> Sort by risk
                 </Button>
-                <Button variant="outline" onClick={() => downloadHandoverPack(patients)} className="gap-2" disabled={!patients.some((p) => p.aiOutput)}>
+                <Button variant="outline" onClick={() => downloadHandoverPack(patients)} className="gap-2">
                   <Download className="h-4 w-4" /> Handover pack
                 </Button>
                 <Button variant="outline" onClick={populateAll} disabled={!!bulk} className="gap-2">

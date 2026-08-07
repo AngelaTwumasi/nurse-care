@@ -24,7 +24,8 @@ import {
   Stethoscope, Plus, Trash2, Upload, FileText, Pill, Activity, HeartPulse,
   ClipboardList, Sparkles, ArrowLeft, GraduationCap, ShieldAlert, ListChecks,
   ClipboardCheck, Loader2, BookOpen, User, BedDouble, AlertTriangle, Lightbulb,
-  CheckCircle2, FileUp, StickyNote, X,
+  CheckCircle2, FileUp, StickyNote, X, Download, Copy, Clock, TrendingUp,
+  TrendingDown, Minus, Gauge, Siren,
 } from 'lucide-react'
 
 const HERO_IMG = 'https://images.pexels.com/photos/4021772/pexels-photo-4021772.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940'
@@ -341,22 +342,228 @@ const URGENCY = {
   routine: { label: 'Routine', cls: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
 }
 
-function AIResults({ ai, generatedAt }) {
+const RISK = {
+  low: { cls: 'from-emerald-500 to-teal-600', badge: 'bg-emerald-100 text-emerald-700', label: 'Low risk' },
+  medium: { cls: 'from-amber-500 to-orange-600', badge: 'bg-amber-100 text-amber-700', label: 'Medium risk' },
+  high: { cls: 'from-red-500 to-rose-600', badge: 'bg-red-100 text-red-700', label: 'High risk' },
+}
+
+function TrendIcon({ trend, className }) {
+  if (trend === 'worsening') return <TrendingUp className={className} />
+  if (trend === 'improving') return <TrendingDown className={className} />
+  return <Minus className={className} />
+}
+
+function DeteriorationAlert({ ew }) {
+  if (!ew) return null
+  const r = RISK[ew.riskLevel] || RISK.medium
+  const worsening = ew.trend === 'worsening'
+  return (
+    <Card className={`overflow-hidden border-0 bg-gradient-to-br ${r.cls} text-white`}>
+      <CardContent className="py-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="rounded-xl bg-white/20 p-2.5">
+              {worsening ? <Siren className="h-6 w-6" /> : <Gauge className="h-6 w-6" />}
+            </div>
+            <div>
+              <p className="text-sm font-medium opacity-90">Deterioration watch · Early Warning</p>
+              <div className="flex items-center gap-2">
+                <span className="text-2xl font-bold leading-none">Score {ew.score ?? 'N/A'}</span>
+                <span className="inline-flex items-center gap-1 rounded-full bg-white/20 px-2 py-0.5 text-xs font-semibold uppercase tracking-wide">
+                  <TrendIcon trend={ew.trend} className="h-3.5 w-3.5" /> {ew.trend || 'stable'}
+                </span>
+              </div>
+            </div>
+          </div>
+          <span className="rounded-full bg-white/25 px-3 py-1 text-sm font-semibold">{r.label}</span>
+        </div>
+        {ew.rationale && <p className="mt-3 text-sm opacity-95">{ew.rationale}</p>}
+        {ew.escalation && (
+          <div className="mt-2 flex items-start gap-2 rounded-lg bg-black/15 p-2.5 text-sm">
+            <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" /> <span><b>Action:</b> {ew.escalation}</span>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function VitalsTimeline({ vitals = [], meds = [] }) {
+  const hasVitals = vitals.length > 0
+  const hasMeds = meds.length > 0
+  if (!hasVitals && !hasMeds) {
+    return <p className="text-sm text-muted-foreground">No time-stamped vitals or medication times were found in the documents.</p>
+  }
+  const vitalChip = (label, val) => val ? (
+    <span className="inline-flex items-center rounded-md bg-muted px-2 py-0.5 text-xs">
+      <span className="font-medium text-muted-foreground mr-1">{label}</span>{val}
+    </span>
+  ) : null
+  return (
+    <div className="space-y-5">
+      {hasVitals && (
+        <div>
+          <h4 className="mb-3 flex items-center gap-2 text-sm font-semibold"><Activity className="h-4 w-4 text-rose-600" /> Vital signs over the shift</h4>
+          <div className="relative space-y-3 pl-5">
+            <span className="absolute left-1.5 top-1 bottom-1 w-px bg-border" />
+            {vitals.map((v, i) => (
+              <div key={i} className="relative">
+                <span className="absolute -left-[15px] top-1.5 h-2.5 w-2.5 rounded-full bg-primary ring-4 ring-background" />
+                <div className="rounded-lg border bg-card p-3">
+                  <div className="flex items-center gap-2">
+                    <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+                    <span className="text-sm font-semibold">{v.time || '—'}</span>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {vitalChip('HR', v.hr)}
+                    {vitalChip('BP', v.bp)}
+                    {vitalChip('RR', v.rr)}
+                    {vitalChip('SpO₂', v.spo2)}
+                    {vitalChip('Temp', v.temp)}
+                  </div>
+                  {v.notes && <p className="mt-2 text-xs text-muted-foreground">{v.notes}</p>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {hasMeds && (
+        <div>
+          <h4 className="mb-3 flex items-center gap-2 text-sm font-semibold"><Pill className="h-4 w-4 text-fuchsia-600" /> Medication times</h4>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {meds.map((m, i) => (
+              <div key={i} className="flex items-center gap-3 rounded-lg border bg-card p-2.5">
+                <span className="inline-flex items-center gap-1 rounded-md bg-fuchsia-100 px-2 py-1 text-xs font-semibold text-fuchsia-700"><Clock className="h-3 w-3" /> {m.time || '—'}</span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium">{m.medication}</p>
+                  {m.dose && <p className="text-xs text-muted-foreground">{m.dose}</p>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function buildHandoverText(patient, ai) {
+  const L = []
+  L.push(`NURSECARE HANDOVER — ${patient.name || 'Patient'}`)
+  L.push(`Bed/Room: ${patient.bed || 'N/A'}   Age: ${patient.age || 'N/A'}`)
+  if (patient.diagnosis) L.push(`Diagnosis: ${patient.diagnosis}`)
+  L.push('')
+  if (ai.earlyWarning) L.push(`EARLY WARNING: Score ${ai.earlyWarning.score ?? 'N/A'} · ${ai.earlyWarning.riskLevel || ''} · trend ${ai.earlyWarning.trend || ''}`)
+  L.push('')
+  L.push('ISBAR')
+  const s = ai.isbar || {}
+  L.push(`I - Identify: ${s.identify || ''}`)
+  L.push(`S - Situation: ${s.situation || ''}`)
+  L.push(`B - Background: ${s.background || ''}`)
+  L.push(`A - Assessment: ${s.assessment || ''}`)
+  L.push(`R - Recommendation: ${s.recommendation || ''}`)
+  L.push('')
+  L.push('CARE PRIORITIES')
+  ;(ai.priorities || []).forEach((p, i) => L.push(`${p.rank || i + 1}. [${(p.urgency || '').toUpperCase()}] ${p.priority} — ${p.rationale}`))
+  L.push('')
+  L.push('NURSING INTERVENTIONS')
+  ;(ai.interventions || []).forEach((it) => L.push(`• ${it.intervention} (${it.frequency || ''}) — monitor: ${it.monitoring || ''}`))
+  L.push('')
+  if ((ai.medications || []).length) {
+    L.push('MEDICATIONS')
+    ;(ai.medications || []).forEach((m) => L.push(`• ${m.name} ${m.dose || ''} ${m.route || ''} ${m.notes ? '— ' + m.notes : ''}`))
+    L.push('')
+  }
+  if ((ai.redFlags || []).length) {
+    L.push('RED FLAGS — ESCALATE')
+    ;(ai.redFlags || []).forEach((r) => L.push(`! ${r}`))
+    L.push('')
+  }
+  if (ai.safetyNotice) L.push(ai.safetyNotice)
+  return L.join('\n')
+}
+
+function esc(str) {
+  return String(str ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+function downloadHandoverPDF(patient, ai) {
+  const s = ai.isbar || {}
+  const row = (label, val) => `<tr><td class="lbl">${label}</td><td>${esc(val)}</td></tr>`
+  const list = (arr, fn) => (arr || []).map(fn).join('')
+  const ewHtml = ai.earlyWarning ? `<div class="ew ew-${esc(ai.earlyWarning.riskLevel)}">Early Warning Score ${esc(ai.earlyWarning.score)} · ${esc(ai.earlyWarning.riskLevel)} risk · trend ${esc(ai.earlyWarning.trend)}<br/><small>${esc(ai.earlyWarning.rationale || '')}</small></div>` : ''
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Handover — ${esc(patient.name)}</title>
+  <style>
+    *{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;box-sizing:border-box}
+    body{margin:32px;color:#0f172a;line-height:1.5}
+    h1{font-size:22px;margin:0}
+    h2{font-size:14px;text-transform:uppercase;letter-spacing:.05em;color:#0d9488;border-bottom:2px solid #99f6e4;padding-bottom:4px;margin:22px 0 10px}
+    .meta{color:#475569;font-size:13px;margin-top:4px}
+    table{width:100%;border-collapse:collapse;font-size:13px}
+    td{padding:6px 8px;vertical-align:top;border-bottom:1px solid #e2e8f0}
+    td.lbl{width:130px;font-weight:600;color:#0f766e}
+    ul{margin:6px 0;padding-left:20px;font-size:13px}
+    li{margin:4px 0}
+    .ew{margin-top:10px;padding:10px 12px;border-radius:8px;font-weight:600;font-size:14px}
+    .ew-low{background:#d1fae5;color:#065f46}.ew-medium{background:#fef3c7;color:#92400e}.ew-high{background:#fee2e2;color:#991b1b}
+    .foot{margin-top:24px;font-size:11px;color:#64748b;border-top:1px solid #e2e8f0;padding-top:8px}
+    .badge{display:inline-block;background:#f1f5f9;border-radius:4px;padding:1px 6px;font-size:11px;margin-right:4px}
+  </style></head><body>
+  <h1>NurseCare Handover</h1>
+  <div class="meta"><b>${esc(patient.name)}</b> · ${esc(patient.bed || 'No bed')} · ${esc(patient.age || 'N/A')} yrs${patient.diagnosis ? ' · ' + esc(patient.diagnosis) : ''}</div>
+  ${ewHtml}
+  <h2>ISBAR</h2>
+  <table>${row('Identify', s.identify)}${row('Situation', s.situation)}${row('Background', s.background)}${row('Assessment', s.assessment)}${row('Recommendation', s.recommendation)}</table>
+  <h2>Care Priorities</h2>
+  <ul>${list(ai.priorities, (p, i) => `<li><span class="badge">${esc((p.urgency || '').toUpperCase())}</span><b>${esc(p.priority)}</b> — ${esc(p.rationale)}</li>`)}</ul>
+  <h2>Nursing Interventions</h2>
+  <ul>${list(ai.interventions, (it) => `<li><b>${esc(it.intervention)}</b> <i>(${esc(it.frequency || '')})</i> — monitor: ${esc(it.monitoring || '')}</li>`)}</ul>
+  ${(ai.medications || []).length ? `<h2>Medications</h2><ul>${list(ai.medications, (m) => `<li><b>${esc(m.name)}</b> ${esc(m.dose || '')} ${esc(m.route || '')} ${m.notes ? '— ' + esc(m.notes) : ''}</li>`)}</ul>` : ''}
+  ${(ai.redFlags || []).length ? `<h2>Red Flags — Escalate</h2><ul>${list(ai.redFlags, (r) => `<li>${esc(r)}</li>`)}</ul>` : ''}
+  <div class="foot">${esc(ai.safetyNotice || 'Verify all medications, doses and escalation with your senior/RN.')} · Generated by NurseCare on ${new Date().toLocaleString()}</div>
+  </body></html>`
+  const w = window.open('', '_blank')
+  if (!w) { toast.error('Please allow pop-ups to download the PDF'); return }
+  w.document.open()
+  w.document.write(html)
+  w.document.close()
+  setTimeout(() => { w.focus(); w.print() }, 500)
+}
+
+function AIResults({ ai, patient, generatedAt }) {
+  const copyHandover = async () => {
+    try {
+      await navigator.clipboard.writeText(buildHandoverText(patient, ai))
+      toast.success('Handover copied to clipboard')
+    } catch (e) { toast.error('Could not copy') }
+  }
   return (
     <div className="space-y-4">
+      <DeteriorationAlert ew={ai.earlyWarning} />
+
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs text-muted-foreground">{generatedAt ? `Generated ${new Date(generatedAt).toLocaleString()}` : ''}</p>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" className="gap-2" onClick={copyHandover}><Copy className="h-4 w-4" /> Copy handover</Button>
+          <Button size="sm" className="gap-2" onClick={() => downloadHandoverPDF(patient, ai)}><Download className="h-4 w-4" /> Download PDF</Button>
+        </div>
+      </div>
+
       {ai.patientSummary && (
         <Card className="bg-accent/40 border-primary/20">
           <CardContent className="pt-4">
             <p className="text-sm leading-relaxed">{ai.patientSummary}</p>
-            {generatedAt && <p className="mt-2 text-xs text-muted-foreground">Generated {new Date(generatedAt).toLocaleString()}</p>}
           </CardContent>
         </Card>
       )}
 
       <Tabs defaultValue="priorities">
-        <TabsList className="grid w-full grid-cols-4">
+        <TabsList className="grid w-full grid-cols-5">
           <TabsTrigger value="priorities" className="gap-1.5"><ListChecks className="h-4 w-4" /><span className="hidden sm:inline">Priorities</span></TabsTrigger>
-          <TabsTrigger value="interventions" className="gap-1.5"><ClipboardCheck className="h-4 w-4" /><span className="hidden sm:inline">Interventions</span></TabsTrigger>
+          <TabsTrigger value="interventions" className="gap-1.5"><ClipboardCheck className="h-4 w-4" /><span className="hidden sm:inline">Care</span></TabsTrigger>
+          <TabsTrigger value="timeline" className="gap-1.5"><Clock className="h-4 w-4" /><span className="hidden sm:inline">Timeline</span></TabsTrigger>
           <TabsTrigger value="meds" className="gap-1.5"><Pill className="h-4 w-4" /><span className="hidden sm:inline">Meds</span></TabsTrigger>
           <TabsTrigger value="isbar" className="gap-1.5"><ClipboardList className="h-4 w-4" /><span className="hidden sm:inline">ISBAR</span></TabsTrigger>
         </TabsList>
@@ -398,6 +605,13 @@ function AIResults({ ai, generatedAt }) {
               </CardContent>
             </Card>
           ))}
+        </TabsContent>
+
+        {/* Timeline */}
+        <TabsContent value="timeline" className="mt-4">
+          <Card><CardContent className="pt-4">
+            <VitalsTimeline vitals={ai.vitalsTimeline} meds={ai.medicationTimes} />
+          </CardContent></Card>
         </TabsContent>
 
         {/* Meds */}
@@ -579,7 +793,7 @@ function PatientDetail({ patient, onBack, refresh, onDelete }) {
             </CardContent></Card>
           )}
 
-          {!generating && patient.aiOutput && <AIResults ai={patient.aiOutput} generatedAt={patient.aiGeneratedAt} />}
+          {!generating && patient.aiOutput && <AIResults ai={patient.aiOutput} patient={patient} generatedAt={patient.aiGeneratedAt} />}
 
           {!generating && !patient.aiOutput && (
             <Card><CardContent className="py-12 text-center">

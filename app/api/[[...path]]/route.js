@@ -66,10 +66,21 @@ Return ONLY a valid JSON object (no markdown, no commentary) with EXACTLY this s
   "interventions": [ { "intervention": "what to do", "frequency": "how often / timing", "monitoring": "what to watch for", "rationale": "why" } ],
   "isbar": { "identify": "...", "situation": "...", "background": "...", "assessment": "...", "recommendation": "..." },
   "medications": [ { "name": "...", "dose": "...", "route": "...", "notes": "timing or nursing considerations" } ],
+  "medicationTimes": [ { "time": "e.g. 0800", "medication": "name", "dose": "dose" } ],
+  "vitalsTimeline": [ { "time": "e.g. 0600 or 07/08 14:00", "hr": "", "bp": "", "rr": "", "spo2": "", "temp": "", "notes": "any observation at this time" } ],
+  "earlyWarning": {
+    "score": "numeric early warning / MEWS-style score if derivable from vitals, else 'N/A'",
+    "riskLevel": "low" | "medium" | "high",
+    "trend": "improving" | "stable" | "worsening",
+    "rationale": "one line explaining the score/trend from the vitals seen",
+    "escalation": "what the new grad should do now (e.g. increase obs frequency, notify RN, call MET/rapid response)"
+  },
   "redFlags": [ "signs of deterioration to escalate immediately" ],
   "newGradTips": [ "practical, encouraging tips for a new grad managing this patient" ],
   "safetyNotice": "one line reminding the nurse to verify with a senior/RN"
-}`
+}
+
+For "vitalsTimeline" and "medicationTimes": extract EVERY time-stamped observation and medication administration/scheduled time you can find across the documents, in chronological order. Leave a field as "" if not recorded. For "earlyWarning": base the trend on how the vitals change over time in the documents (e.g. rising HR/RR, falling SpO2/BP = worsening).`
 
   parts.push({ type: 'text', text: intro })
 

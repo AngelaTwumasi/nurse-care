@@ -149,12 +149,15 @@ backend:
     priority: "high"
     needs_retesting: false
     status_history:
-        -working: "NA"
-        -agent: "main"
-        -comment: "POST /api/patients/:id/generate. Builds multimodal message (text + PDF file part + image_url) and calls Emergent proxy https://integrations.emergentagent.com/llm/chat/completions with model gemini/gemini-2.5-pro. Parses JSON (priorities, interventions, medications, isbar, redFlags, newGradTips, safetyNotice) and saves aiOutput on patient. Integration was verified working standalone (PDF read returned correct extraction, HTTP 200)."
         -working: true
         -agent: "testing"
-        -comment: "✅ AI generation verified working with REAL Gemini 2.5 Pro. POST /api/patients/:id/generate successfully called Emergent LLM proxy and returned complete aiOutput in 32.7 seconds. Response contains all required keys: patientSummary (string), priorities (3 items with priority/rationale/urgency), interventions (6 items), isbar (all 5 sections: identify/situation/background/assessment/recommendation), medications (4 items), redFlags (6 items), newGradTips (5 items), safetyNotice (string). aiOutput and aiGeneratedAt correctly persisted to patient record. All tests passed."
+        -comment: "Verified 12/12 earlier with all base keys."
+        -working: "NA"
+        -agent: "main"
+        -comment: "EXTENDED schema (needs retest): aiOutput must now ALSO include medicationTimes[] ({time,medication,dose}), vitalsTimeline[] ({time,hr,bp,rr,spo2,temp,notes}), and earlyWarning{score,riskLevel(low|medium|high),trend(improving|stable|worsening),rationale,escalation}. Confirm returned + persisted when documents contain time-stamped vitals."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ SCHEMA EXTENSION VERIFIED. Created patient 'Timeline Test' with deteriorating vitals (HR 88→118, BP 130/80→92/55, RR 18→28, SpO2 96→89, Temp 37.2→38.6). AI generation completed in 29.0s. ALL base keys (8) + NEW keys (3) present and valid: medicationTimes[] (3 items: Paracetamol 0600/1400, Ceftriaxone 0800), vitalsTimeline[] (3 time-stamped observations), earlyWarning{score:N/A, riskLevel:high, trend:worsening, rationale, escalation}. Trend correctly identified as 'worsening'. All data persisted. Test patient cleaned up."
 
 frontend:
   - task: "Shift dashboard + patient workspace + tutorial"
@@ -163,23 +166,48 @@ frontend:
     file: "/app/app/page.js"
     stuck_count: 0
     priority: "high"
-    needs_retesting: false
+    needs_retesting: true
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "Not yet tested by automation. Dashboard renders, empty state and header verified via screenshot."
+        -comment: "Dashboard renders, empty state and header verified via screenshot. Needs full click-by-click UI test of add patient -> upload note -> generate -> results."
+
+  - task: "Export Handover (copy + download PDF)"
+    implemented: true
+    working: "NA"
+    file: "/app/app/page.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "After AI generate, results show 'Copy handover' (clipboard) and 'Download PDF' (opens print window with styled ISBAR/priorities/interventions/meds/red flags)."
+
+  - task: "Shift Timeline (vitals + med times) and Deterioration Alert (EWS)"
+    implemented: true
+    working: "NA"
+    file: "/app/app/page.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "New 'Timeline' tab renders ai.vitalsTimeline + ai.medicationTimes. Deterioration Alert banner renders ai.earlyWarning (score, riskLevel color, trend icon, escalation) above the tabs."
 
 metadata:
   created_by: "main_agent"
-  version: "1.0"
-  test_sequence: 1
+  version: "1.1"
+  test_sequence: 3
   run_ui: false
 
 test_plan:
   current_focus:
-    - "Patients CRUD (max 4 per shift)"
-    - "Document management (upload files/notes, delete)"
     - "AI generate nursing cares (Gemini 2.5 Pro multimodal)"
+    - "Shift dashboard + patient workspace + tutorial"
+    - "Export Handover (copy + download PDF)"
+    - "Shift Timeline (vitals + med times) and Deterioration Alert (EWS)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -187,23 +215,19 @@ test_plan:
 agent_communication:
     -agent: "main"
     -message: |
-      Please test the NurseCare backend at /api. Base URL prefix is /api.
-      Scenarios:
-      1) GET /api/patients -> array (empty initially ok).
-      2) POST /api/patients with {name,bed,age,diagnosis} -> returns patient with uuid id.
-         Create patients; verify the 5th create returns 400 (max 4 enforced).
-      3) GET /api/patients/:id, PUT (update fields), DELETE.
-      4) POST /api/patients/:id/documents with a typed note doc
-         {documents:[{name:"Vitals note",category:"vitals",kind:"text",textContent:"BP 150/95, HR 92, SpO2 94%, RR 22"}]}
-         -> returns patient with documents array containing the note.
-      5) DELETE /api/patients/:id/documents/:docId removes it.
-      6) POST /api/patients/:id/generate with at least one text document present ->
-         should return { aiOutput, aiGeneratedAt } where aiOutput has keys:
-         patientSummary, priorities[], interventions[], isbar{identify,situation,background,assessment,recommendation},
-         medications[], redFlags[], newGradTips[], safetyNotice. This calls the real Gemini
-         model and may take 15-40s. Verify it saves to the patient (GET patient shows aiOutput).
-      Note: EMERGENT_LLM_KEY and EMERGENT_LLM_BASE_URL are set in /app/.env. Model = gemini/gemini-2.5-pro.
-      Please clean up any test patients you create at the end so the shift isn't left full.
+      ROUND 2 — new features added. Please RETEST.
+      BACKEND (quick): POST /api/patients/:id/generate now must ALSO return, inside aiOutput,
+      the keys: medicationTimes[] ({time,medication,dose}), vitalsTimeline[]
+      ({time,hr,bp,rr,spo2,temp,notes}) and earlyWarning{score,riskLevel,trend,rationale,escalation}.
+      Provide a document with time-stamped vitals so these populate, e.g. a text doc:
+      "Obs 0600 HR 88 BP 130/80 RR 18 SpO2 96%. Obs 1000 HR 104 BP 100/60 RR 24 SpO2 92%.
+       Obs 1400 HR 118 BP 92/55 RR 28 SpO2 89%." Verify all base keys still present and the
+      3 new keys exist and persist. Clean up test patients afterwards.
+    -agent: "testing"
+    -message: |
+      ✅ BACKEND TESTING COMPLETE - ALL TESTS PASSED (12/12) [round 1]
+      Patients CRUD, document management, and AI generation (real Gemini 2.5 Pro, 32.7s) all verified.
+      All base aiOutput keys present and persisted. Test patients cleaned up. Backend production-ready.
     -agent: "testing"
     -message: |
       ✅ BACKEND TESTING COMPLETE - ALL TESTS PASSED (12/12)
@@ -239,3 +263,32 @@ agent_communication:
       Test cleanup: All test patients removed successfully.
       
       NO CRITICAL ISSUES FOUND. Backend is production-ready.
+    -agent: "testing"
+    -message: |
+      ✅ SCHEMA EXTENSION TEST PASSED (ROUND 2)
+      
+      Retested AI generation endpoint after schema extension. All tests passed:
+      
+      Test scenario:
+      - Created patient "Timeline Test" (68yo, Pneumonia monitoring for sepsis)
+      - Added vitals document with DETERIORATING observations:
+        * 0600: HR 88, BP 130/80, RR 18, SpO2 96%, Temp 37.2
+        * 1000: HR 104, BP 100/60, RR 24, SpO2 92%, Temp 38.1
+        * 1400: HR 118, BP 92/55, RR 28, SpO2 89%, Temp 38.6
+      - Medications: Paracetamol 1g PO at 0600/1400, Ceftriaxone 1g IV at 0800
+      
+      Results:
+      ✅ AI generation completed in 29.0 seconds (REAL Gemini 2.5 Pro call)
+      ✅ ALL 8 BASE keys present and valid:
+         patientSummary, priorities, interventions, isbar (5 sections), 
+         medications, redFlags, newGradTips, safetyNotice
+      ✅ ALL 3 NEW keys present and valid:
+         - medicationTimes[] (3 items with time/medication/dose)
+         - vitalsTimeline[] (3 items with time/hr/bp/rr/spo2/temp/notes)
+         - earlyWarning{score, riskLevel, trend, rationale, escalation}
+      ✅ earlyWarning.riskLevel = "high" (correct)
+      ✅ earlyWarning.trend = "worsening" (correctly identified deterioration)
+      ✅ All data persisted correctly via GET /api/patients/:id
+      ✅ Test patient cleaned up successfully
+      
+      Backend AI generation with extended schema is PRODUCTION-READY.

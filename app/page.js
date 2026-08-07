@@ -1356,8 +1356,13 @@ function App() {
   const [boardOpen, setBoardOpen] = useState(false)
   const [generatingId, setGeneratingId] = useState(null)
   const [bulk, setBulk] = useState(null) // {done,total} while populating all
+  const [detail, setDetail] = useState(null) // full patient for detail view
+  const [sortMode, setSortMode] = useState('manual') // 'manual' | 'risk'
+  const sortModeRef = useRef('manual')
   const dragIndex = useRef(null)
   const [dragOver, setDragOver] = useState(null)
+
+  const setMode = (m) => { sortModeRef.current = m; setSortMode(m) }
 
   const saveOrder = (list) => {
     try { localStorage.setItem('nursecare_order', JSON.stringify(list.map((p) => p.id))) } catch {}
@@ -1375,25 +1380,36 @@ function App() {
 
   const rankRisk = (p) => { const r = p.aiOutput?.earlyWarning?.riskLevel; return r === 'high' ? 3 : r === 'medium' ? 2 : r === 'low' ? 1 : 0 }
   const sortByRiskList = (list) => [...list].sort((a, b) => rankRisk(b) - rankRisk(a))
+  const applyManualOrder = (list) => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('nursecare_order') || '[]')
+      if (!saved.length) return list
+      const map = Object.fromEntries(list.map((p) => [p.id, p]))
+      const ordered = saved.map((id) => map[id]).filter(Boolean)
+      const rest = list.filter((p) => !saved.includes(p.id))
+      return [...ordered, ...rest]
+    } catch { return list }
+  }
 
-  const load = useCallback(async (opts = {}) => {
+  const load = useCallback(async () => {
     try {
       const data = await api('/patients')
-      let next
-      if (opts.sort) {
-        next = [...data].sort((a, b) => {
-          const rk = (p) => { const r = p.aiOutput?.earlyWarning?.riskLevel; return r === 'high' ? 3 : r === 'medium' ? 2 : r === 'low' ? 1 : 0 }
-          return rk(b) - rk(a)
-        })
-        try { localStorage.setItem('nursecare_order', JSON.stringify(next.map((p) => p.id))) } catch {}
-      } else {
-        next = applyOrder(data)
-      }
+      const next = sortModeRef.current === 'risk'
+        ? [...data].sort((a, b) => { const rk = (p) => { const r = p.aiOutput?.earlyWarning?.riskLevel; return r === 'high' ? 3 : r === 'medium' ? 2 : r === 'low' ? 1 : 0 }; return rk(b) - rk(a) })
+        : applyManualOrder(data)
       setPatients(next)
     } catch (e) { toast.error(e.message) } finally { setLoading(false) }
   }, [])
 
+  const loadDetail = useCallback(async (id) => {
+    try { const p = await api(`/patients/${id}`); setDetail(p) } catch (e) { toast.error(e.message) }
+  }, [])
+
   useEffect(() => { load() }, [load])
+  useEffect(() => {
+    if (selectedId) { setDetail(null); loadDetail(selectedId) }
+    else setDetail(null)
+  }, [selectedId, loadDetail])
 
   useEffect(() => {
     if (typeof window !== 'undefined' && !localStorage.getItem('nursecare_seen_tutorial')) {
@@ -1409,12 +1425,21 @@ function App() {
     return p
   }
 
+  const addSample = async () => {
+    try {
+      const p = await api('/sample', { method: 'POST' })
+      setPatients((prev) => [...prev, p])
+      toast.success('Demo patient added — open it to explore the care plan')
+      setSelectedId(p.id)
+    } catch (e) { toast.error(e.message) }
+  }
+
   const populatePatient = async (id) => {
     setGeneratingId(id)
     try {
       await api(`/patients/${id}/generate`, { method: 'POST' })
-      await load({ sort: true })
-      toast.success('Nursing cares populated · sorted by risk')
+      await load()
+      toast.success(sortModeRef.current === 'risk' ? 'Populated · sorted by risk' : 'Nursing cares populated')
     } catch (e) { toast.error(e.message) } finally { setGeneratingId(null) }
   }
 
@@ -1429,9 +1454,9 @@ function App() {
       } catch (e) { /* continue */ }
       setBulk({ done: i + 1, total: patients.length })
     }
-    await load({ sort: true })
+    await load()
     setBulk(null)
-    toast.success(`Populated ${ok} of ${patients.length} · sorted by risk`)
+    toast.success(`Populated ${ok} of ${patients.length} patients`)
   }
 
   // drag reorder
@@ -1442,6 +1467,7 @@ function App() {
     dragIndex.current = null
     setDragOver(null)
     if (from == null || from === i) return
+    setMode('manual')
     setPatients((prev) => {
       const next = [...prev]
       const [moved] = next.splice(from, 1)
@@ -1451,14 +1477,16 @@ function App() {
     })
   }
 
-  const sortByRisk = () => {
-    const rank = (p) => { const r = p.aiOutput?.earlyWarning?.riskLevel; return r === 'high' ? 3 : r === 'medium' ? 2 : r === 'low' ? 1 : 0 }
-    setPatients((prev) => {
-      const next = [...prev].sort((a, b) => rank(b) - rank(a))
-      saveOrder(next)
-      return next
-    })
-    toast.success('Sorted by risk — highest first')
+  const toggleSort = () => {
+    if (sortModeRef.current === 'risk') {
+      setMode('manual')
+      setPatients((prev) => applyManualOrder(prev))
+      toast.success('Back to your manual order')
+    } else {
+      setMode('risk')
+      setPatients((prev) => sortByRiskList(prev))
+      toast.success('Sorted by risk — highest first')
+    }
   }
 
   const deletePatient = async (id) => {
@@ -1470,7 +1498,7 @@ function App() {
     } catch (e) { toast.error(e.message) }
   }
 
-  const selected = patients.find((p) => p.id === selectedId)
+  const selected = !!selectedId
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-accent/30 to-background">
@@ -1512,13 +1540,17 @@ function App() {
       <main className="container py-6">
         {loading ? (
           <div className="flex h-64 items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>
-        ) : selected ? (
-          <PatientDetail
-            patient={selected}
-            onBack={() => setSelectedId(null)}
-            refresh={() => load({ sort: true })}
-            onDelete={deletePatient}
-          />
+        ) : selectedId ? (
+          detail ? (
+            <PatientDetail
+              patient={detail}
+              onBack={() => setSelectedId(null)}
+              refresh={async () => { await load(); await loadDetail(selectedId) }}
+              onDelete={deletePatient}
+            />
+          ) : (
+            <div className="flex h-64 items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>
+          )
         ) : (
           <>
             {/* Shift banner */}
@@ -1528,15 +1560,24 @@ function App() {
                 <p className="text-sm text-muted-foreground">{patients.length} of {MAX_PATIENTS} patients · tap a patient to manage documents & generate cares</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <Button variant="outline" onClick={sortByRisk} className="gap-2">
-                  <ArrowDownWideNarrow className="h-4 w-4" /> Sort by risk
+                <Button variant={sortMode === 'risk' ? 'default' : 'outline'} onClick={toggleSort} className="gap-2">
+                  <ArrowDownWideNarrow className="h-4 w-4" /> {sortMode === 'risk' ? 'Sorted by risk' : 'Sort by risk'}
                 </Button>
-                <Button variant="outline" onClick={() => downloadHandoverPack(patients)} className="gap-2">
+                <Button
+                  variant={patients.some((p) => p.aiOutput) ? 'default' : 'outline'}
+                  onClick={() => downloadHandoverPack(patients)}
+                  className={`gap-2 ${patients.some((p) => p.aiOutput) ? 'ring-2 ring-primary/40' : ''}`}
+                >
                   <Download className="h-4 w-4" /> Handover pack
                 </Button>
                 <Button variant="outline" onClick={populateAll} disabled={!!bulk} className="gap-2">
                   {bulk ? <><Loader2 className="h-4 w-4 animate-spin" /> Populating {bulk.done}/{bulk.total}…</> : <><Sparkles className="h-4 w-4" /> Populate all</>}
                 </Button>
+                {patients.length < MAX_PATIENTS && (
+                  <Button variant="ghost" onClick={addSample} className="gap-2 text-primary">
+                    <Sparkles className="h-4 w-4" /> Sample
+                  </Button>
+                )}
                 <AddPatientDialog onAdd={addPatient} reload={load} disabled={patients.length >= MAX_PATIENTS} />
               </div>
             </div>
@@ -1554,6 +1595,13 @@ function App() {
                 <CardContent className="pt-5">
                   <p className="mb-4 text-sm text-muted-foreground">Add your first patient below. You can attach their care plan, meds, vitals or allied-health notes now, or add them later — then tap <b>Populate</b> to generate the nursing cares.</p>
                   <PatientForm onAdd={addPatient} reload={load} />
+                  <div className="relative my-4">
+                    <Separator />
+                    <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-card px-2 text-xs text-muted-foreground">or</span>
+                  </div>
+                  <Button variant="outline" className="w-full gap-2" onClick={addSample}>
+                    <Sparkles className="h-4 w-4 text-primary" /> Try a sample patient (ready-made care plan)
+                  </Button>
                 </CardContent>
               </Card>
             ) : (
@@ -1579,9 +1627,10 @@ function App() {
                     reload={load}
                     disabled={false}
                     trigger={
-                      <button className="flex min-h-[168px] w-full flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-border text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary">
+                      <button className="flex min-h-[168px] w-full flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-border text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary">
                         <Plus className="h-6 w-6" />
                         <span className="text-sm font-medium">Add patient</span>
+                        <span className="text-[11px] text-muted-foreground/70">tap to add your next patient</span>
                       </button>
                     }
                   />

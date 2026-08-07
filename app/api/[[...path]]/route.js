@@ -171,7 +171,90 @@ async function handleRoute(request, { params }) {
     // ---- Patients collection ----
     if (route === '/patients' && method === 'GET') {
       const patients = await db.collection('patients').find({}).sort({ createdAt: 1 }).toArray()
-      return json(patients.map(({ _id, ...rest }) => rest))
+      return json(patients.map(({ _id, documents, ...rest }) => ({
+        ...rest,
+        documents: (documents || []).map((d) => ({ id: d.id, name: d.name, category: d.category, kind: d.kind, mimeType: d.mimeType })),
+      })))
+    }
+
+    if (route === '/sample' && method === 'POST') {
+      const count = await db.collection('patients').countDocuments()
+      if (count >= MAX_PATIENTS) {
+        return json({ error: `Patient load is full (max ${MAX_PATIENTS} patients). Discharge one first.` }, 400)
+      }
+      const now = new Date()
+      const h = (n) => new Date(now.getTime() - n * 3600 * 1000)
+      const patient = {
+        id: uuidv4(),
+        name: 'DEMO · Mr. Alan Reid',
+        bed: 'Bed 6',
+        age: '79',
+        diagnosis: 'Congestive heart failure exacerbation; Type 2 diabetes; monitoring for fluid overload',
+        documents: [{
+          id: uuidv4(), name: 'Care plan & obs (demo)', category: 'careplan', kind: 'text', mimeType: null, dataUrl: null,
+          textContent: 'CHF exacerbation. Fluid restrict 1.5L/day, daily weights, strict fluid balance. Meds: Furosemide 40mg IV BD (0800, 1400), Metformin 500mg BD (0800, 1800), Enoxaparin 40mg SC (2000). Obs 0600 HR 88 BP 128/78 RR 20 SpO2 94% Temp 36.9. Obs 1000 HR 102 BP 112/70 RR 24 SpO2 91% Temp 37.2. Obs 1400 HR 116 BP 98/60 RR 28 SpO2 88% Temp 37.6. Increasing SOB, bilateral basal crackles.',
+          uploadedAt: now,
+        }],
+        aiOutput: {
+          patientSummary: '79-year-old man admitted with a heart-failure flare. Over the shift his heart and breathing rates have climbed while oxygen levels have fallen — a picture of worsening fluid overload that needs close watching.',
+          priorities: [
+            { rank: 1, priority: 'Respiratory support & oxygenation', rationale: 'SpO2 falling 94→88% with rising RR and crackles suggests pulmonary congestion', urgency: 'urgent' },
+            { rank: 2, priority: 'Fluid balance & diuresis', rationale: 'Ensure furosemide given, monitor urine output, daily weight and strict fluid balance', urgency: 'soon' },
+            { rank: 3, priority: 'Glycaemic monitoring', rationale: 'T2DM on metformin — check BGLs, watch for illness-related swings', urgency: 'routine' },
+          ],
+          interventions: [
+            { intervention: 'Apply oxygen and sit upright; titrate to SpO2 ≥ 92%', frequency: 'Now, continuous', monitoring: 'SpO2, work of breathing, RR', rationale: 'Improves oxygenation and reduces preload' },
+            { intervention: 'Administer prescribed IV furosemide and monitor response', frequency: '0800 & 1400', monitoring: 'Urine output, weight, K+', rationale: 'Reduces fluid overload' },
+            { intervention: 'Half-hourly vital signs and escalate on trigger', frequency: 'Every 30 min', monitoring: 'HR, BP, RR, SpO2', rationale: 'Detects deterioration early' },
+          ],
+          isbar: {
+            identify: 'Mr Alan Reid, 79, Bed 6, RN [your name] calling.',
+            situation: 'Increasing shortness of breath with falling oxygen saturations this shift.',
+            background: 'Admitted with CHF exacerbation; also has T2DM. On IV furosemide, fluid restricted.',
+            assessment: 'HR 116, BP 98/60, RR 28, SpO2 88% on room air, bibasal crackles — appears fluid overloaded and hypoxic.',
+            recommendation: 'Please review urgently; consider increasing diuresis and oxygen; would like a medical review now.',
+          },
+          medications: [
+            { name: 'Furosemide', dose: '40mg', route: 'IV', times: ['0800', '1400'], notes: 'Monitor urine output and potassium' },
+            { name: 'Metformin', dose: '500mg', route: 'PO', times: ['0800', '1800'], notes: 'Hold if unwell/for contrast' },
+            { name: 'Enoxaparin', dose: '40mg', route: 'SC', times: ['2000'], notes: 'VTE prophylaxis' },
+          ],
+          medicationTimes: [
+            { time: '0800', medication: 'Furosemide 40mg IV / Metformin 500mg', dose: '' },
+            { time: '1400', medication: 'Furosemide 40mg IV', dose: '' },
+            { time: '1800', medication: 'Metformin 500mg', dose: '' },
+            { time: '2000', medication: 'Enoxaparin 40mg SC', dose: '' },
+          ],
+          careSchedule: [
+            { time: '0800', task: 'Morning meds, weigh patient, commence fluid balance chart', priority: 'soon' },
+            { time: 'Every 30 min', task: 'Vital signs while deteriorating', priority: 'urgent' },
+            { time: '1200', task: 'Check blood glucose level', priority: 'routine' },
+            { time: '1400', task: 'Second furosemide dose, reassess oedema & chest', priority: 'soon' },
+            { time: 'End of shift', task: 'Update fluid balance total and handover', priority: 'routine' },
+          ],
+          vitalsTimeline: [
+            { time: '0600', hr: '88', bp: '128/78', rr: '20', spo2: '94', temp: '36.9', notes: 'Baseline' },
+            { time: '1000', hr: '102', bp: '112/70', rr: '24', spo2: '91', temp: '37.2', notes: 'Increasing SOB' },
+            { time: '1400', hr: '116', bp: '98/60', rr: '28', spo2: '88', temp: '37.6', notes: 'Bibasal crackles' },
+          ],
+          earlyWarning: { score: '6', riskLevel: 'high', trend: 'worsening', rationale: 'Rising HR/RR with falling SpO2 and BP over the shift', escalation: 'Notify senior RN and request urgent medical review / consider MET criteria' },
+          redFlags: ['SpO2 < 90% or ongoing fall', 'RR > 28 or increasing distress', 'Systolic BP < 90 mmHg', 'New confusion or chest pain'],
+          newGradTips: ['Sit the patient up and get oxygen on early — it buys time.', 'Escalate on a trend, not just a single number.', 'Have your ISBAR ready before you call — it makes the review faster.'],
+          safetyNotice: 'This is a demo. Always verify medications, doses and escalation with your senior/RN.',
+        },
+        aiGeneratedAt: now,
+        careDone: {},
+        ewHistory: [
+          { t: h(4), score: 2, risk: 'low', riskValue: 1 },
+          { t: h(2), score: 4, risk: 'medium', riskValue: 2 },
+          { t: now, score: 6, risk: 'high', riskValue: 3 },
+        ],
+        isSample: true,
+        createdAt: now,
+      }
+      await db.collection('patients').insertOne(patient)
+      const { _id, ...clean } = patient
+      return json(clean)
     }
 
     if (route === '/patients' && method === 'POST') {

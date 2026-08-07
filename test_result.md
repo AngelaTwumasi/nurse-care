@@ -166,6 +166,21 @@ backend:
         -comment: "✅ ROUND 3 SCHEMA EXTENSION VERIFIED. Created patient 'Care Sched Test' (75yo, Post-op day 1) with comprehensive care plan document including: Medications with times (Paracetamol 1g PO 0600/1400, Ceftriaxone 1g IV 0800, Enoxaparin 40mg SC 2000), scheduled nursing tasks (hourly neuro obs, 4-hourly vitals, breakfast 0800, mobilise 1030, wound check), and vitals observations (0600 HR 82 BP 128/78, 1000 HR 96 BP 112/70). AI generation completed in 33.0s (REAL Gemini 2.5 Pro). ALL 12 required keys present and valid: 8 base keys + 3 Round 2 keys (medicationTimes, vitalsTimeline, earlyWarning) + NEW careSchedule[] (12 scheduled tasks with time/task/priority structure). ALL 3 medications have 'times' arrays populated correctly (Paracetamol ['0600','1400'], Ceftriaxone ['0800'], Enoxaparin ['2000']). All data persisted correctly. Test patient cleaned up. Backend AI generation with full schema is PRODUCTION-READY."
 
 frontend:
+  - task: "Sample scenario presets (POST /api/sample with type)"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "POST /api/sample now accepts JSON body {type: 'sepsis'|'postop'|'chf'}. Default (no body/type) = 'chf' (Alan Reid CHF). 'sepsis' = Mrs Rita Kaur urosepsis high-risk. 'postop' = Mr Tom Fischer stable day-1 appendicectomy low-risk. Each returns a full patient object with pre-built aiOutput, documents, ewHistory and isSample:true. Verify all 3 types create distinct patients with correct name/diagnosis and a valid aiOutput (earlyWarning.riskLevel high for sepsis, low for postop, high for chf). Also verify max-4 enforcement still returns 400. Clean up created demo patients after (do NOT delete patient 'm')."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ SAMPLE SCENARIO PRESETS FULLY WORKING. Comprehensive backend testing completed. (1) SEPSIS SAMPLE: POST /api/sample with {\"type\":\"sepsis\"} returns 200, patient name 'DEMO · Mrs. Rita Kaur', diagnosis 'Urosepsis; hypotension; on IV antibiotics and fluids', earlyWarning.riskLevel='high', earlyWarning.score='8', earlyWarning.trend='worsening', isSample=true, valid UUID id (36 chars), documents array with 1 document, ewHistory array with 3 entries. (2) POST-OP SAMPLE: POST /api/sample with {\"type\":\"postop\"} returns 200, patient name 'DEMO · Mr. Tom Fischer', diagnosis 'Day 1 post laparoscopic appendicectomy; stable, pain management', earlyWarning.riskLevel='low', earlyWarning.score='0', earlyWarning.trend='stable', isSample=true, valid UUID id, documents array with 1 document, ewHistory array with 3 entries. (3) CHF SAMPLE (DEFAULT): POST /api/sample with no body returns 200, patient name 'DEMO · Mr. Alan Reid', diagnosis 'Congestive heart failure exacerbation; Type 2 diabetes; monitoring for fluid overload', earlyWarning.riskLevel='high', earlyWarning.score='6', earlyWarning.trend='worsening', isSample=true, valid UUID id, documents array with 1 document, ewHistory array with 3 entries. (4) ALL AIOUTPUT KEYS PRESENT: All 12 required keys verified for all samples: patientSummary, priorities, interventions, isbar (with all 5 sections: identify/situation/background/assessment/recommendation), medications, medicationTimes, vitalsTimeline, careSchedule, earlyWarning (with all 5 fields: score/riskLevel/trend/rationale/escalation), redFlags, newGradTips, safetyNotice. (5) MAX-4 ENFORCEMENT: Created samples until patient count reached 4, then attempted to create 5th patient. Correctly returned HTTP 400 with error message 'Patient load is full (max 4 patients). Discharge one first.' (6) CLEANUP: All created sample patients deleted successfully via DELETE /api/patients/:id. Patient 'm' was not present during testing. Backend sample scenario presets feature is PRODUCTION-READY."
+
   - task: "Shift dashboard + patient workspace + tutorial"
     implemented: true
     working: true
@@ -213,16 +228,13 @@ frontend:
 
 metadata:
   created_by: "main_agent"
-  version: "1.5"
-  test_sequence: 8
+  version: "1.6"
+  test_sequence: 9
   run_ui: false
 
 test_plan:
   current_focus:
-    - "AI generate nursing cares (Gemini 2.5 Pro multimodal)"
-    - "Shift dashboard + patient workspace + tutorial"
-    - "Export Handover (copy + download PDF)"
-    - "Shift Timeline (vitals + med times) and Deterioration Alert (EWS)"
+    - "Sample scenario presets (POST /api/sample with type)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -898,3 +910,92 @@ agent_communication:
       ✅ Patient "m" preserved as instructed
       
       NO CRITICAL ISSUES FOUND. All Round 8 UI features working correctly and production-ready.
+
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      NEW FEATURE TEST — Sample scenario presets backend endpoint.
+      POST /api/sample now accepts optional JSON body {type: 'sepsis'|'postop'|'chf'}.
+      Default (no body) = 'chf' (Alan Reid CHF high-risk).
+      'sepsis' = Mrs Rita Kaur urosepsis high-risk.
+      'postop' = Mr Tom Fischer stable day-1 appendicectomy low-risk.
+      Each returns a full patient object with pre-built aiOutput, documents, ewHistory and isSample:true.
+      Verify all 3 types create distinct patients with correct name/diagnosis and valid aiOutput.
+      Also verify max-4 enforcement still returns 400.
+      Clean up created demo patients after (do NOT delete patient 'm').
+    -agent: "testing"
+    -message: |
+      ✅ SAMPLE SCENARIO PRESETS BACKEND TEST COMPLETED - ALL TESTS PASSED (6/6)
+      
+      Comprehensive backend testing of POST /api/sample endpoint completed successfully.
+      
+      Test Results:
+      
+      1. ✅ SEPSIS SAMPLE - WORKING
+         - POST /api/sample with {"type":"sepsis"} returns HTTP 200
+         - Patient name: "DEMO · Mrs. Rita Kaur" ✅
+         - Diagnosis: "Urosepsis; hypotension; on IV antibiotics and fluids" ✅
+         - earlyWarning.riskLevel: "high" ✅
+         - earlyWarning.score: "8" ✅
+         - earlyWarning.trend: "worsening" ✅
+         - isSample: true ✅
+         - Valid UUID id (36 characters, not MongoDB ObjectId) ✅
+         - documents array: 1 document (Care plan & obs demo) ✅
+         - ewHistory array: 3 entries ✅
+      
+      2. ✅ POST-OP SAMPLE - WORKING
+         - POST /api/sample with {"type":"postop"} returns HTTP 200
+         - Patient name: "DEMO · Mr. Tom Fischer" ✅
+         - Diagnosis: "Day 1 post laparoscopic appendicectomy; stable, pain management" ✅
+         - earlyWarning.riskLevel: "low" ✅
+         - earlyWarning.score: "0" ✅
+         - earlyWarning.trend: "stable" ✅
+         - isSample: true ✅
+         - Valid UUID id ✅
+         - documents array: 1 document ✅
+         - ewHistory array: 3 entries ✅
+      
+      3. ✅ CHF SAMPLE (DEFAULT) - WORKING
+         - POST /api/sample with no body returns HTTP 200
+         - Patient name: "DEMO · Mr. Alan Reid" ✅
+         - Diagnosis: "Congestive heart failure exacerbation; Type 2 diabetes; monitoring for fluid overload" ✅
+         - earlyWarning.riskLevel: "high" ✅
+         - earlyWarning.score: "6" ✅
+         - earlyWarning.trend: "worsening" ✅
+         - isSample: true ✅
+         - Valid UUID id ✅
+         - documents array: 1 document ✅
+         - ewHistory array: 3 entries ✅
+      
+      4. ✅ COMPLETE AIOUTPUT STRUCTURE - VERIFIED
+         - All 12 required keys present in all samples:
+           * patientSummary ✅
+           * priorities (array with rank/priority/rationale/urgency) ✅
+           * interventions (array with intervention/frequency/monitoring/rationale) ✅
+           * isbar (object with all 5 sections: identify/situation/background/assessment/recommendation) ✅
+           * medications (array with name/dose/route/times/notes) ✅
+           * medicationTimes (array with time/medication/dose) ✅
+           * vitalsTimeline (array with time/hr/bp/rr/spo2/temp/notes) ✅
+           * careSchedule (array with time/task/priority) ✅
+           * earlyWarning (object with score/riskLevel/trend/rationale/escalation) ✅
+           * redFlags (array) ✅
+           * newGradTips (array) ✅
+           * safetyNotice (string) ✅
+         - Sepsis sample: 2 medications, 2 medication times, 2 vitals observations, 3 care tasks, 3 priorities, 3 interventions, 4 red flags, 3 tips
+         - Post-op sample: 2 medications, 2 medication times, 2 vitals observations, 3 care tasks, 3 priorities, 3 interventions, 3 red flags, 3 tips
+         - CHF sample: 3 medications, 4 medication times, 3 vitals observations, 5 care tasks, 3 priorities, 3 interventions, 4 red flags, 3 tips
+      
+      5. ✅ MAX-4 ENFORCEMENT - WORKING
+         - Created sample patients until total count reached 4
+         - Attempted to create 5th patient
+         - Correctly returned HTTP 400 ✅
+         - Error message: "Patient load is full (max 4 patients). Discharge one first." ✅
+         - Error message contains "full" and "max" keywords ✅
+      
+      6. ✅ CLEANUP - SUCCESSFUL
+         - All created sample patients deleted successfully via DELETE /api/patients/:id
+         - Patient 'm' was not present during testing (no accidental deletion)
+         - Final patient count: 0 (clean state restored)
+      
+      NO CRITICAL ISSUES FOUND. Sample scenario presets backend feature is PRODUCTION-READY.

@@ -26,10 +26,11 @@ import {
   ClipboardCheck, Loader2, BookOpen, User, BedDouble, AlertTriangle, Lightbulb,
   CheckCircle2, FileUp, StickyNote, X, Download, Copy, Clock, TrendingUp,
   TrendingDown, Minus, Gauge, Siren, Volume2, Square, LayoutGrid,
-  Dumbbell, Apple, UserRound, CalendarClock, GripVertical, Users, ArrowDownWideNarrow, Printer,
+  Dumbbell, Apple, UserRound, CalendarClock, GripVertical, Users, ArrowDownWideNarrow, Printer, Search,
 } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
 import { Checkbox } from '@/components/ui/checkbox'
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator } from '@/components/ui/dropdown-menu'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer, Legend,
 } from 'recharts'
@@ -1358,6 +1359,7 @@ function App() {
   const [bulk, setBulk] = useState(null) // {done,total} while populating all
   const [detail, setDetail] = useState(null) // full patient for detail view
   const [sortMode, setSortMode] = useState('manual') // 'manual' | 'risk'
+  const [search, setSearch] = useState('')
   const sortModeRef = useRef('manual')
   const dragIndex = useRef(null)
   const [dragOver, setDragOver] = useState(null)
@@ -1425,9 +1427,9 @@ function App() {
     return p
   }
 
-  const addSample = async () => {
+  const addSample = async (type = 'chf') => {
     try {
-      const p = await api('/sample', { method: 'POST' })
+      const p = await api('/sample', { method: 'POST', body: JSON.stringify({ type }) })
       setPatients((prev) => [...prev, p])
       toast.success('Demo patient added — open it to explore the care plan')
       setSelectedId(p.id)
@@ -1435,6 +1437,8 @@ function App() {
   }
 
   const populatePatient = async (id) => {
+    const p = patients.find((x) => x.id === id)
+    if (p?.aiOutput && !window.confirm(`Regenerate cares for ${p.name}? This replaces the current plan.`)) return
     setGeneratingId(id)
     try {
       await api(`/patients/${id}/generate`, { method: 'POST' })
@@ -1445,6 +1449,7 @@ function App() {
 
   const populateAll = async () => {
     if (!patients.length) return
+    if (patients.some((p) => p.aiOutput) && !window.confirm('Populate all will regenerate every patient and replace existing plans. Continue?')) return
     setBulk({ done: 0, total: patients.length })
     let ok = 0
     for (let i = 0; i < patients.length; i++) {
@@ -1574,13 +1579,72 @@ function App() {
                   {bulk ? <><Loader2 className="h-4 w-4 animate-spin" /> Populating {bulk.done}/{bulk.total}…</> : <><Sparkles className="h-4 w-4" /> Populate all</>}
                 </Button>
                 {patients.length < MAX_PATIENTS && (
-                  <Button variant="ghost" onClick={addSample} className="gap-2 text-primary">
-                    <Sparkles className="h-4 w-4" /> Sample
-                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" className="gap-2 text-primary">
+                        <Sparkles className="h-4 w-4" /> Sample
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-56">
+                      <DropdownMenuLabel>Add a demo patient</DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={() => addSample('sepsis')} className="gap-2">
+                        <Siren className="h-4 w-4 text-red-600" />
+                        <div className="flex flex-col">
+                          <span className="font-medium">Sepsis (deteriorating)</span>
+                          <span className="text-[11px] text-muted-foreground">High risk · urosepsis</span>
+                        </div>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => addSample('postop')} className="gap-2">
+                        <ClipboardCheck className="h-4 w-4 text-emerald-600" />
+                        <div className="flex flex-col">
+                          <span className="font-medium">Post-op (stable)</span>
+                          <span className="text-[11px] text-muted-foreground">Low risk · day 1 appendicectomy</span>
+                        </div>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => addSample('chf')} className="gap-2">
+                        <HeartPulse className="h-4 w-4 text-amber-600" />
+                        <div className="flex flex-col">
+                          <span className="font-medium">Heart failure (CHF)</span>
+                          <span className="text-[11px] text-muted-foreground">Worsening · fluid overload</span>
+                        </div>
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 )}
                 <AddPatientDialog onAdd={addPatient} reload={load} disabled={patients.length >= MAX_PATIENTS} />
               </div>
             </div>
+
+            {patients.length > 0 && (
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                <div className="relative w-full max-w-xs">
+                  <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search name, bed or diagnosis…"
+                    className="pl-8"
+                  />
+                  {search && (
+                    <button
+                      onClick={() => setSearch('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      aria-label="Clear search"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                  <span className="font-medium text-foreground">Risk key:</span>
+                  <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-red-500" /> High</span>
+                  <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-amber-500" /> Medium</span>
+                  <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-emerald-500" /> Low</span>
+                  <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-slate-300" /> Not populated</span>
+                </div>
+              </div>
+            )}
 
             {patients.length === 0 ? (
               <Card className="mx-auto max-w-lg overflow-hidden">
@@ -1606,21 +1670,26 @@ function App() {
               </Card>
             ) : (
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                {patients.map((p, i) => (
-                  <PatientCard
-                    key={p.id}
-                    patient={p}
-                    index={i}
-                    onOpen={setSelectedId}
-                    onPopulate={populatePatient}
-                    generating={generatingId === p.id || (!!bulk && !p.aiOutput)}
-                    onDragStart={handleDragStart}
-                    onDragOver={handleDragOver}
-                    onDrop={handleDrop}
-                    dragging={dragOver === i}
-                  />
-                ))}
-                {Array.from({ length: MAX_PATIENTS - patients.length }).map((_, i) => (
+                {patients.map((p, i) => {
+                  const q = search.trim().toLowerCase()
+                  const match = !q || [p.name, p.bed, p.diagnosis].filter(Boolean).some((f) => f.toLowerCase().includes(q))
+                  if (!match) return null
+                  return (
+                    <PatientCard
+                      key={p.id}
+                      patient={p}
+                      index={i}
+                      onOpen={setSelectedId}
+                      onPopulate={populatePatient}
+                      generating={generatingId === p.id || (!!bulk && !p.aiOutput)}
+                      onDragStart={handleDragStart}
+                      onDragOver={handleDragOver}
+                      onDrop={handleDrop}
+                      dragging={dragOver === i}
+                    />
+                  )
+                })}
+                {!search.trim() && Array.from({ length: MAX_PATIENTS - patients.length }).map((_, i) => (
                   <AddPatientDialog
                     key={`empty-${i}`}
                     onAdd={addPatient}
@@ -1635,6 +1704,16 @@ function App() {
                     }
                   />
                 ))}
+              </div>
+            )}
+
+            {patients.length > 0 && search.trim() && !patients.some((p) => {
+              const q = search.trim().toLowerCase()
+              return [p.name, p.bed, p.diagnosis].filter(Boolean).some((f) => f.toLowerCase().includes(q))
+            }) && (
+              <div className="mt-4 rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
+                No patients match “{search.trim()}”.
+                <button onClick={() => setSearch('')} className="ml-1 font-medium text-primary hover:underline">Clear search</button>
               </div>
             )}
 

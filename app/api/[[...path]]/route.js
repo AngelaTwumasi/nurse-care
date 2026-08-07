@@ -154,6 +154,108 @@ For "vitalsTimeline" and "medicationTimes": extract EVERY time-stamped observati
   return result
 }
 
+// ---------- Sample scenario presets ----------
+function applySamplePreset(patient, type, h, now) {
+  if (type === 'sepsis') {
+    patient.name = 'DEMO · Mrs. Rita Kaur'
+    patient.bed = 'Bed 2'
+    patient.age = '68'
+    patient.diagnosis = 'Urosepsis; hypotension; on IV antibiotics and fluids'
+    patient.documents[0].textContent = 'Query urosepsis. Cultures sent. IV Piperacillin-Tazobactam 4.5g QID (0600 1200 1800 2400). 1L Hartmanns stat then reassess. Hourly obs. Obs 0600 HR 108 BP 96/54 RR 24 SpO2 94% Temp 38.8. Obs 0900 HR 124 BP 84/48 RR 28 SpO2 92% Temp 39.4. Lactate 3.1. Reduced urine output.'
+    patient.aiOutput = {
+      patientSummary: '68-year-old woman with urosepsis. She is febrile, tachycardic and becoming hypotensive with a rising lactate — she meets sepsis criteria and needs the sepsis pathway now.',
+      priorities: [
+        { rank: 1, priority: 'Sepsis 6 / restore perfusion', rationale: 'Hypotension (84/48), tachycardia and lactate 3.1 indicate septic shock risk', urgency: 'urgent' },
+        { rank: 2, priority: 'Timely IV antibiotics', rationale: 'Give prescribed antibiotics without delay after cultures', urgency: 'urgent' },
+        { rank: 3, priority: 'Urine output & fluid status', rationale: 'Reduced output — monitor hourly, consider IDC and fluid balance', urgency: 'soon' },
+      ],
+      interventions: [
+        { intervention: 'Escalate for MET/sepsis pathway; give O2 to keep SpO2 ≥ 94%', frequency: 'Now', monitoring: 'BP, HR, SpO2, GCS', rationale: 'Septic shock is time-critical' },
+        { intervention: 'Give IV fluid bolus as prescribed and reassess', frequency: 'Stat then review', monitoring: 'BP, lactate, urine output', rationale: 'Restores perfusion' },
+        { intervention: 'Administer IV antibiotics on time', frequency: '0600/1200/1800/2400', monitoring: 'Temp, allergy status', rationale: 'Source control of infection' },
+      ],
+      isbar: {
+        identify: 'Mrs Rita Kaur, 68, Bed 2, RN [your name] calling.',
+        situation: 'I am worried about sepsis — she is hypotensive and tachycardic.',
+        background: 'Admitted with query urosepsis, on IV antibiotics and fluids.',
+        assessment: 'HR 124, BP 84/48, RR 28, Temp 39.4, lactate 3.1, low urine output.',
+        recommendation: 'Please attend now; I have started the sepsis pathway and need urgent review.',
+      },
+      medications: [
+        { name: 'Piperacillin-Tazobactam', dose: '4.5g', route: 'IV', times: ['0600', '1200', '1800', '2400'], notes: 'Give on time; check allergies' },
+        { name: 'Hartmann\'s solution', dose: '1L', route: 'IV', times: ['stat'], notes: 'Bolus then reassess' },
+      ],
+      medicationTimes: [
+        { time: '0600', medication: 'Pip-Taz 4.5g IV', dose: '' },
+        { time: '1200', medication: 'Pip-Taz 4.5g IV', dose: '' },
+      ],
+      careSchedule: [
+        { time: 'Now', task: 'Escalate sepsis, oxygen, IV access x2, bloods & cultures', priority: 'urgent' },
+        { time: 'Hourly', task: 'Vital signs and urine output', priority: 'urgent' },
+        { time: '1200', task: 'Repeat lactate and reassess fluids', priority: 'soon' },
+      ],
+      vitalsTimeline: [
+        { time: '0600', hr: '108', bp: '96/54', rr: '24', spo2: '94', temp: '38.8', notes: 'Febrile' },
+        { time: '0900', hr: '124', bp: '84/48', rr: '28', spo2: '92', temp: '39.4', notes: 'Hypotensive, lactate 3.1' },
+      ],
+      earlyWarning: { score: '8', riskLevel: 'high', trend: 'worsening', rationale: 'Hypotension with tachycardia, fever and rising lactate', escalation: 'Activate MET / sepsis team immediately' },
+      redFlags: ['Systolic BP < 90 or not responding to fluids', 'Lactate rising', 'New confusion', 'Urine output < 0.5 mL/kg/hr'],
+      newGradTips: ['Think Sepsis 6: give 3, take 3.', 'Don\'t delay antibiotics waiting for everything else.', 'Escalate early — sepsis moves fast.'],
+      safetyNotice: 'This is a demo. Always verify medications, doses and escalation with your senior/RN.',
+    }
+    patient.ewHistory = [ { t: h(3), score: 4, risk: 'medium', riskValue: 2 }, { t: h(1), score: 6, risk: 'high', riskValue: 3 }, { t: now, score: 8, risk: 'high', riskValue: 3 } ]
+  } else if (type === 'postop') {
+    patient.name = 'DEMO · Mr. Tom Fischer'
+    patient.bed = 'Bed 9'
+    patient.age = '54'
+    patient.diagnosis = 'Day 1 post laparoscopic appendicectomy; stable, pain management'
+    patient.documents[0].textContent = 'POD1 lap appendicectomy. Obs stable. Regular paracetamol 1g QID (0600 1200 1800 2400), oxycodone 5mg PRN pain. Encourage mobilisation, deep breathing, diet as tolerated. Obs 0600 HR 74 BP 122/76 RR 15 SpO2 98% Temp 36.8. Obs 1000 HR 78 BP 118/74 RR 14 SpO2 99% Temp 36.9. Pain 3/10.'
+    patient.aiOutput = {
+      patientSummary: '54-year-old man, day 1 after keyhole appendix surgery. He is comfortable and stable; the focus is good pain relief, early mobilising and watching for any post-op complications.',
+      priorities: [
+        { rank: 1, priority: 'Pain management', rationale: 'Good analgesia enables mobilising and recovery', urgency: 'soon' },
+        { rank: 2, priority: 'Mobilisation & chest care', rationale: 'Prevents VTE and chest complications', urgency: 'routine' },
+        { rank: 3, priority: 'Wound & diet progression', rationale: 'Monitor wound, advance diet as tolerated', urgency: 'routine' },
+      ],
+      interventions: [
+        { intervention: 'Regular analgesia and reassess pain score', frequency: 'QID + PRN', monitoring: 'Pain score, sedation, bowels', rationale: 'Comfort and function' },
+        { intervention: 'Assist to mobilise and deep-breathe', frequency: '3-4 hourly', monitoring: 'Tolerance, dizziness', rationale: 'Reduces VTE/atelectasis' },
+        { intervention: 'Wound check and observe for infection', frequency: 'Each shift', monitoring: 'Redness, ooze, fever', rationale: 'Early detection' },
+      ],
+      isbar: {
+        identify: 'Mr Tom Fischer, 54, Bed 9, RN [your name].',
+        situation: 'Day 1 post appendicectomy, stable and comfortable.',
+        background: 'Laparoscopic appendicectomy yesterday, no complications.',
+        assessment: 'Obs stable, pain 3/10 with regular analgesia, mobilising with help.',
+        recommendation: 'Continue current plan; will escalate if pain, fever or obs change.',
+      },
+      medications: [
+        { name: 'Paracetamol', dose: '1g', route: 'PO', times: ['0600', '1200', '1800', '2400'], notes: 'Regular, max 4g/day' },
+        { name: 'Oxycodone', dose: '5mg', route: 'PO', times: ['PRN'], notes: 'For breakthrough pain; watch sedation' },
+      ],
+      medicationTimes: [
+        { time: '0600', medication: 'Paracetamol 1g', dose: '' },
+        { time: '1200', medication: 'Paracetamol 1g', dose: '' },
+      ],
+      careSchedule: [
+        { time: '0800', task: 'Analgesia, assist to shower & mobilise', priority: 'routine' },
+        { time: '1000', task: 'Deep breathing exercises, encourage diet', priority: 'routine' },
+        { time: '1400', task: 'Wound check and pain reassessment', priority: 'soon' },
+      ],
+      vitalsTimeline: [
+        { time: '0600', hr: '74', bp: '122/76', rr: '15', spo2: '98', temp: '36.8', notes: 'Comfortable' },
+        { time: '1000', hr: '78', bp: '118/74', rr: '14', spo2: '99', temp: '36.9', notes: 'Pain 3/10' },
+      ],
+      earlyWarning: { score: '0', riskLevel: 'low', trend: 'stable', rationale: 'All observations within normal limits and stable', escalation: 'Routine monitoring; escalate if pain, fever or obs change' },
+      redFlags: ['Fever or wound redness/discharge', 'Increasing abdominal pain or distension', 'Persistent nausea/vomiting'],
+      newGradTips: ['Stay ahead of pain with regular analgesia.', 'Early mobilising prevents clots and chest infections.', 'A calm shift is a great time to practise your ISBAR.'],
+      safetyNotice: 'This is a demo. Always verify medications, doses and escalation with your senior/RN.',
+    }
+    patient.ewHistory = [ { t: h(3), score: 1, risk: 'low', riskValue: 1 }, { t: h(1), score: 0, risk: 'low', riskValue: 1 }, { t: now, score: 0, risk: 'low', riskValue: 1 } ]
+  }
+  // 'chf' keeps the default object already built
+}
+
 // ---------- Router ----------
 async function handleRoute(request, { params }) {
   const { path = [] } = await params
@@ -184,6 +286,8 @@ async function handleRoute(request, { params }) {
       }
       const now = new Date()
       const h = (n) => new Date(now.getTime() - n * 3600 * 1000)
+      let sampleType = 'chf'
+      try { const _b = await request.json(); if (_b && _b.type) sampleType = _b.type } catch {}
       const patient = {
         id: uuidv4(),
         name: 'DEMO · Mr. Alan Reid',
@@ -252,6 +356,7 @@ async function handleRoute(request, { params }) {
         isSample: true,
         createdAt: now,
       }
+      applySamplePreset(patient, sampleType, h, now)
       await db.collection('patients').insertOne(patient)
       const { _id, ...clean } = patient
       return json(clean)

@@ -1,366 +1,387 @@
 #!/usr/bin/env python3
 """
-Backend test for NurseCare API - Round 8: ewHistory accumulation
-Tests that ewHistory accumulates on each generate while careDone resets.
+Backend test for NurseCare Sample Scenario Presets feature
+Tests POST /api/sample endpoint with different scenario types
 """
+
 import requests
-import time
 import json
+import os
+from typing import List, Dict, Any
 
-BASE_URL = "https://web-nurse-app.preview.emergentagent.com/api"
+# Get base URL from environment
+BASE_URL = os.getenv('NEXT_PUBLIC_BASE_URL', 'https://web-nurse-app.preview.emergentagent.com')
+API_BASE = f"{BASE_URL}/api"
 
-def test_ewhistory_accumulation():
-    """
-    Test ewHistory accumulation on generate endpoint.
-    Steps:
-    1. Create patient "EWHist Test"
-    2. Add vitals document with deteriorating observations
-    3. POST /generate (first time) - verify ewHistory length 1, careDone is {}
-    4. PUT careDone to {"0": true}
-    5. POST /generate (second time) - verify ewHistory length 2, careDone reset to {}
-    6. Verify all 12 aiOutput keys present
-    7. Cleanup
-    """
-    print("\n" + "="*80)
-    print("ROUND 8: Testing ewHistory accumulation on generate endpoint")
-    print("="*80 + "\n")
+def print_test_header(test_name: str):
+    """Print a formatted test header"""
+    print(f"\n{'='*80}")
+    print(f"TEST: {test_name}")
+    print(f"{'='*80}")
+
+def print_result(passed: bool, message: str):
+    """Print test result"""
+    status = "✅ PASS" if passed else "❌ FAIL"
+    print(f"{status}: {message}")
+
+def get_patients() -> List[Dict[str, Any]]:
+    """Get all patients"""
+    response = requests.get(f"{API_BASE}/patients")
+    if response.status_code == 200:
+        return response.json()
+    return []
+
+def delete_patient(patient_id: str) -> bool:
+    """Delete a patient by ID"""
+    response = requests.delete(f"{API_BASE}/patients/{patient_id}")
+    return response.status_code == 200
+
+def create_sample_patient(scenario_type: str = None) -> Dict[str, Any]:
+    """Create a sample patient with optional scenario type"""
+    url = f"{API_BASE}/sample"
+    headers = {'Content-Type': 'application/json'}
     
-    patient_id = None
+    if scenario_type:
+        body = json.dumps({"type": scenario_type})
+        response = requests.post(url, headers=headers, data=body)
+    else:
+        response = requests.post(url, headers=headers)
+    
+    return {
+        'status_code': response.status_code,
+        'data': response.json() if response.status_code in [200, 400] else None,
+        'response': response
+    }
+
+def validate_ai_output(ai_output: Dict[str, Any]) -> tuple[bool, List[str]]:
+    """Validate that aiOutput has all required keys"""
+    required_keys = [
+        'patientSummary',
+        'priorities',
+        'interventions',
+        'isbar',
+        'medications',
+        'medicationTimes',
+        'vitalsTimeline',
+        'careSchedule',
+        'earlyWarning',
+        'redFlags',
+        'newGradTips',
+        'safetyNotice'
+    ]
+    
+    missing_keys = []
+    for key in required_keys:
+        if key not in ai_output:
+            missing_keys.append(key)
+    
+    # Validate isbar has all 5 sections
+    if 'isbar' in ai_output:
+        isbar_keys = ['identify', 'situation', 'background', 'assessment', 'recommendation']
+        for key in isbar_keys:
+            if key not in ai_output['isbar']:
+                missing_keys.append(f'isbar.{key}')
+    
+    # Validate earlyWarning structure
+    if 'earlyWarning' in ai_output:
+        ew_keys = ['score', 'riskLevel', 'trend', 'rationale', 'escalation']
+        for key in ew_keys:
+            if key not in ai_output['earlyWarning']:
+                missing_keys.append(f'earlyWarning.{key}')
+    
+    return len(missing_keys) == 0, missing_keys
+
+def validate_patient_structure(patient: Dict[str, Any], expected_name_part: str, expected_risk: str) -> tuple[bool, List[str]]:
+    """Validate patient structure and content"""
+    errors = []
+    
+    # Check UUID format (not ObjectId)
+    if 'id' not in patient:
+        errors.append("Missing 'id' field")
+    elif not isinstance(patient['id'], str) or len(patient['id']) != 36:
+        errors.append(f"Invalid UUID format: {patient.get('id')}")
+    
+    # Check name contains expected part
+    if 'name' not in patient:
+        errors.append("Missing 'name' field")
+    elif expected_name_part not in patient['name']:
+        errors.append(f"Name '{patient['name']}' does not contain '{expected_name_part}'")
+    
+    # Check isSample flag
+    if 'isSample' not in patient:
+        errors.append("Missing 'isSample' field")
+    elif patient['isSample'] != True:
+        errors.append(f"isSample should be true, got {patient['isSample']}")
+    
+    # Check documents array
+    if 'documents' not in patient:
+        errors.append("Missing 'documents' field")
+    elif not isinstance(patient['documents'], list):
+        errors.append("documents should be an array")
+    elif len(patient['documents']) == 0:
+        errors.append("documents array is empty")
+    
+    # Check aiOutput exists
+    if 'aiOutput' not in patient:
+        errors.append("Missing 'aiOutput' field")
+    else:
+        # Validate aiOutput structure
+        valid, missing = validate_ai_output(patient['aiOutput'])
+        if not valid:
+            errors.append(f"aiOutput missing keys: {', '.join(missing)}")
+        
+        # Check earlyWarning.riskLevel
+        if 'earlyWarning' in patient['aiOutput']:
+            actual_risk = patient['aiOutput']['earlyWarning'].get('riskLevel')
+            if actual_risk != expected_risk:
+                errors.append(f"Expected riskLevel '{expected_risk}', got '{actual_risk}'")
+    
+    # Check ewHistory exists
+    if 'ewHistory' not in patient:
+        errors.append("Missing 'ewHistory' field")
+    elif not isinstance(patient['ewHistory'], list):
+        errors.append("ewHistory should be an array")
+    
+    return len(errors) == 0, errors
+
+def main():
+    print(f"\n{'#'*80}")
+    print("# NurseCare Backend Test - Sample Scenario Presets")
+    print(f"# API Base: {API_BASE}")
+    print(f"{'#'*80}")
+    
+    # Track created sample patients for cleanup
+    created_sample_ids = []
     
     try:
-        # Step 1: Create patient "EWHist Test"
-        print("Step 1: Creating patient 'EWHist Test'...")
-        patient_data = {
-            "name": "EWHist Test",
-            "bed": "B1",
-            "age": "72",
-            "diagnosis": "Sepsis watch"
-        }
+        # TEST 1: Check initial patient count
+        print_test_header("1. Check Initial Patient Count")
+        initial_patients = get_patients()
+        initial_count = len(initial_patients)
+        print(f"Initial patient count: {initial_count}")
         
-        response = requests.post(f"{BASE_URL}/patients", json=patient_data, timeout=30)
-        print(f"  Status: {response.status_code}")
+        # Check if patient 'm' exists
+        patient_m = None
+        for p in initial_patients:
+            if p.get('name') == 'm':
+                patient_m = p
+                print(f"Found patient 'm' with ID: {p.get('id')}")
+                break
         
-        if response.status_code != 200:
-            print(f"  ❌ FAILED: Expected 200, got {response.status_code}")
-            print(f"  Response: {response.text}")
-            return False
+        if patient_m:
+            print_result(True, "Patient 'm' exists and will be preserved")
+        else:
+            print_result(True, "Patient 'm' not found (may not exist yet)")
         
-        patient = response.json()
-        patient_id = patient.get('id')
-        print(f"  ✅ Patient created with ID: {patient_id}")
-        print(f"  Name: {patient.get('name')}, Bed: {patient.get('bed')}, Age: {patient.get('age')}")
+        # TEST 2: Create sepsis sample
+        print_test_header("2. Create Sepsis Sample Patient")
+        result = create_sample_patient('sepsis')
         
-        # Step 2: Add vitals document with deteriorating observations
-        print("\nStep 2: Adding vitals document with deteriorating observations...")
-        doc_data = {
-            "documents": [{
-                "name": "Obs",
-                "category": "vitals",
-                "kind": "text",
-                "textContent": "Obs 0600 HR 92 BP 105/62 RR 22 SpO2 93% Temp 38.2. Obs 1000 HR 118 BP 92/54 RR 28 SpO2 89% Temp 38.9."
-            }]
-        }
-        
-        response = requests.post(f"{BASE_URL}/patients/{patient_id}/documents", json=doc_data, timeout=30)
-        print(f"  Status: {response.status_code}")
-        
-        if response.status_code != 200:
-            print(f"  ❌ FAILED: Expected 200, got {response.status_code}")
-            print(f"  Response: {response.text}")
-            return False
-        
-        updated_patient = response.json()
-        doc_count = len(updated_patient.get('documents', []))
-        print(f"  ✅ Document added successfully. Total documents: {doc_count}")
-        
-        # Step 3: First AI generation
-        print("\nStep 3: First AI generation (REAL Gemini, allow 90s)...")
-        start_time = time.time()
-        
-        response = requests.post(f"{BASE_URL}/patients/{patient_id}/generate", timeout=120)
-        elapsed = time.time() - start_time
-        print(f"  Status: {response.status_code}")
-        print(f"  Time: {elapsed:.1f}s")
-        
-        if response.status_code != 200:
-            print(f"  ❌ FAILED: Expected 200, got {response.status_code}")
-            print(f"  Response: {response.text}")
-            return False
-        
-        gen_result = response.json()
-        print(f"  ✅ AI generation completed in {elapsed:.1f}s")
-        
-        # Get patient to verify ewHistory and careDone
-        print("\nStep 3a: Verifying ewHistory and careDone after first generate...")
-        response = requests.get(f"{BASE_URL}/patients/{patient_id}", timeout=30)
-        
-        if response.status_code != 200:
-            print(f"  ❌ FAILED: Could not retrieve patient")
-            return False
-        
-        patient = response.json()
-        ew_history = patient.get('ewHistory', [])
-        care_done = patient.get('careDone', None)
-        
-        print(f"  ewHistory type: {type(ew_history)}")
-        print(f"  ewHistory length: {len(ew_history) if isinstance(ew_history, list) else 'N/A'}")
-        
-        # Verify ewHistory is an array of length 1
-        if not isinstance(ew_history, list):
-            print(f"  ❌ FAILED: ewHistory is not an array, got {type(ew_history)}")
-            return False
-        
-        if len(ew_history) != 1:
-            print(f"  ❌ FAILED: ewHistory length should be 1, got {len(ew_history)}")
-            return False
-        
-        print(f"  ✅ ewHistory is an array of length 1")
-        
-        # Verify ewHistory[0] structure
-        ew_entry = ew_history[0]
-        print(f"\n  ewHistory[0] structure:")
-        print(f"    t: {ew_entry.get('t')} (type: {type(ew_entry.get('t'))})")
-        print(f"    score: {ew_entry.get('score')} (type: {type(ew_entry.get('score'))})")
-        print(f"    risk: {ew_entry.get('risk')} (type: {type(ew_entry.get('risk'))})")
-        print(f"    riskValue: {ew_entry.get('riskValue')} (type: {type(ew_entry.get('riskValue'))})")
-        
-        # Verify required fields exist
-        if 't' not in ew_entry:
-            print(f"  ❌ FAILED: ewHistory[0] missing 't' field")
-            return False
-        
-        if 'score' not in ew_entry:
-            print(f"  ❌ FAILED: ewHistory[0] missing 'score' field")
-            return False
-        
-        if 'risk' not in ew_entry:
-            print(f"  ❌ FAILED: ewHistory[0] missing 'risk' field")
-            return False
-        
-        if 'riskValue' not in ew_entry:
-            print(f"  ❌ FAILED: ewHistory[0] missing 'riskValue' field")
-            return False
-        
-        # Verify score is number or null
-        score = ew_entry.get('score')
-        if score is not None and not isinstance(score, (int, float)):
-            print(f"  ❌ FAILED: score should be number or null, got {type(score)}")
-            return False
-        
-        # Verify risk is string
-        risk = ew_entry.get('risk')
-        if risk is not None and not isinstance(risk, str):
-            print(f"  ❌ FAILED: risk should be string, got {type(risk)}")
-            return False
-        
-        # Verify riskValue is 0-3
-        risk_value = ew_entry.get('riskValue')
-        if not isinstance(risk_value, (int, float)) or risk_value < 0 or risk_value > 3:
-            print(f"  ❌ FAILED: riskValue should be 0-3, got {risk_value}")
-            return False
-        
-        print(f"  ✅ ewHistory[0] has all required fields with correct types")
-        print(f"     - t: timestamp present")
-        print(f"     - score: {score} (number or null) ✅")
-        print(f"     - risk: '{risk}' (string) ✅")
-        print(f"     - riskValue: {risk_value} (0-3) ✅")
-        
-        # Verify careDone is {}
-        print(f"\n  careDone: {care_done}")
-        if care_done != {}:
-            print(f"  ❌ FAILED: careDone should be {{}}, got {care_done}")
-            return False
-        
-        print(f"  ✅ careDone is {{}} (empty) after first generate")
-        
-        # Step 4: Update careDone to simulate ticked task
-        print("\nStep 4: Updating careDone to {'0': true} to simulate ticked task...")
-        update_data = {"careDone": {"0": True}}
-        
-        response = requests.put(f"{BASE_URL}/patients/{patient_id}", json=update_data, timeout=30)
-        print(f"  Status: {response.status_code}")
-        
-        if response.status_code != 200:
-            print(f"  ❌ FAILED: Expected 200, got {response.status_code}")
-            return False
-        
-        updated_patient = response.json()
-        care_done = updated_patient.get('careDone', {})
-        print(f"  careDone after update: {care_done}")
-        
-        if care_done != {"0": True}:
-            print(f"  ❌ FAILED: careDone should be {{'0': True}}, got {care_done}")
-            return False
-        
-        print(f"  ✅ careDone updated successfully to {{'0': True}}")
-        
-        # Step 5: Second AI generation
-        print("\nStep 5: Second AI generation (REAL Gemini, allow 90s)...")
-        start_time = time.time()
-        
-        response = requests.post(f"{BASE_URL}/patients/{patient_id}/generate", timeout=120)
-        elapsed = time.time() - start_time
-        print(f"  Status: {response.status_code}")
-        print(f"  Time: {elapsed:.1f}s")
-        
-        if response.status_code != 200:
-            print(f"  ❌ FAILED: Expected 200, got {response.status_code}")
-            print(f"  Response: {response.text}")
-            return False
-        
-        print(f"  ✅ Second AI generation completed in {elapsed:.1f}s")
-        
-        # Get patient to verify ewHistory accumulated and careDone reset
-        print("\nStep 5a: Verifying ewHistory ACCUMULATED and careDone RESET...")
-        response = requests.get(f"{BASE_URL}/patients/{patient_id}", timeout=30)
-        
-        if response.status_code != 200:
-            print(f"  ❌ FAILED: Could not retrieve patient")
-            return False
-        
-        patient = response.json()
-        ew_history = patient.get('ewHistory', [])
-        care_done = patient.get('careDone', None)
-        
-        print(f"  ewHistory length: {len(ew_history) if isinstance(ew_history, list) else 'N/A'}")
-        print(f"  careDone: {care_done}")
-        
-        # Verify ewHistory length is now 2 (ACCUMULATED)
-        if not isinstance(ew_history, list):
-            print(f"  ❌ FAILED: ewHistory is not an array")
-            return False
-        
-        if len(ew_history) != 2:
-            print(f"  ❌ FAILED: ewHistory length should be 2 (accumulated), got {len(ew_history)}")
-            return False
-        
-        print(f"  ✅ ewHistory length is now 2 (ACCUMULATED, not reset)")
-        
-        # Verify both entries have correct structure
-        for i, entry in enumerate(ew_history):
-            print(f"\n  ewHistory[{i}]:")
-            print(f"    t: {entry.get('t')}")
-            print(f"    score: {entry.get('score')}")
-            print(f"    risk: {entry.get('risk')}")
-            print(f"    riskValue: {entry.get('riskValue')}")
+        if result['status_code'] == 200:
+            patient = result['data']
+            created_sample_ids.append(patient['id'])
             
-            if 't' not in entry or 'score' not in entry or 'risk' not in entry or 'riskValue' not in entry:
-                print(f"  ❌ FAILED: ewHistory[{i}] missing required fields")
-                return False
-        
-        print(f"  ✅ Both ewHistory entries have correct structure")
-        
-        # Verify careDone was RESET to {}
-        if care_done != {}:
-            print(f"  ❌ FAILED: careDone should be reset to {{}}, got {care_done}")
-            return False
-        
-        print(f"  ✅ careDone was RESET to {{}} (empty) after second generate")
-        
-        # Step 6: Verify all 12 aiOutput keys present
-        print("\nStep 6: Verifying all 12 aiOutput keys present...")
-        ai_output = patient.get('aiOutput', {})
-        
-        required_keys = [
-            'patientSummary',
-            'priorities',
-            'interventions',
-            'isbar',
-            'medications',
-            'medicationTimes',
-            'vitalsTimeline',
-            'careSchedule',
-            'earlyWarning',
-            'redFlags',
-            'newGradTips',
-            'safetyNotice'
-        ]
-        
-        missing_keys = []
-        for key in required_keys:
-            if key not in ai_output:
-                missing_keys.append(key)
-                print(f"  ❌ Missing key: {key}")
+            print(f"✅ Status: 200 OK")
+            print(f"Patient ID: {patient.get('id')}")
+            print(f"Patient Name: {patient.get('name')}")
+            print(f"Diagnosis: {patient.get('diagnosis')}")
+            print(f"Risk Level: {patient.get('aiOutput', {}).get('earlyWarning', {}).get('riskLevel')}")
+            
+            valid, errors = validate_patient_structure(patient, 'Rita Kaur', 'high')
+            if valid:
+                print_result(True, "Sepsis sample patient created with correct structure and data")
             else:
-                print(f"  ✅ {key}: present")
+                print_result(False, f"Validation errors: {'; '.join(errors)}")
+        else:
+            print_result(False, f"Expected 200, got {result['status_code']}: {result['data']}")
         
-        if missing_keys:
-            print(f"\n  ❌ FAILED: Missing {len(missing_keys)} required keys: {missing_keys}")
-            return False
+        # TEST 3: Create postop sample
+        print_test_header("3. Create Post-Op Sample Patient")
+        result = create_sample_patient('postop')
         
-        print(f"\n  ✅ All 12 required aiOutput keys present")
+        if result['status_code'] == 200:
+            patient = result['data']
+            created_sample_ids.append(patient['id'])
+            
+            print(f"✅ Status: 200 OK")
+            print(f"Patient ID: {patient.get('id')}")
+            print(f"Patient Name: {patient.get('name')}")
+            print(f"Diagnosis: {patient.get('diagnosis')}")
+            print(f"Risk Level: {patient.get('aiOutput', {}).get('earlyWarning', {}).get('riskLevel')}")
+            
+            valid, errors = validate_patient_structure(patient, 'Tom Fischer', 'low')
+            if valid:
+                print_result(True, "Post-op sample patient created with correct structure and data")
+            else:
+                print_result(False, f"Validation errors: {'; '.join(errors)}")
+        else:
+            print_result(False, f"Expected 200, got {result['status_code']}: {result['data']}")
         
-        # Additional verification of key structures
-        print("\n  Verifying key structures:")
+        # TEST 4: Create CHF sample (default, no body)
+        print_test_header("4. Create CHF Sample Patient (default, no body)")
+        result = create_sample_patient()
         
-        # Check isbar has 5 sections
-        isbar = ai_output.get('isbar', {})
-        isbar_keys = ['identify', 'situation', 'background', 'assessment', 'recommendation']
-        isbar_ok = all(k in isbar for k in isbar_keys)
-        print(f"    isbar (5 sections): {'✅' if isbar_ok else '❌'}")
+        if result['status_code'] == 200:
+            patient = result['data']
+            created_sample_ids.append(patient['id'])
+            
+            print(f"✅ Status: 200 OK")
+            print(f"Patient ID: {patient.get('id')}")
+            print(f"Patient Name: {patient.get('name')}")
+            print(f"Diagnosis: {patient.get('diagnosis')}")
+            print(f"Risk Level: {patient.get('aiOutput', {}).get('earlyWarning', {}).get('riskLevel')}")
+            
+            valid, errors = validate_patient_structure(patient, 'Alan Reid', 'high')
+            if valid:
+                print_result(True, "CHF sample patient created with correct structure and data")
+            else:
+                print_result(False, f"Validation errors: {'; '.join(errors)}")
+        else:
+            print_result(False, f"Expected 200, got {result['status_code']}: {result['data']}")
         
-        # Check arrays
-        print(f"    priorities: {len(ai_output.get('priorities', []))} items")
-        print(f"    interventions: {len(ai_output.get('interventions', []))} items")
-        print(f"    medications: {len(ai_output.get('medications', []))} items")
-        print(f"    medicationTimes: {len(ai_output.get('medicationTimes', []))} items")
-        print(f"    vitalsTimeline: {len(ai_output.get('vitalsTimeline', []))} items")
-        print(f"    careSchedule: {len(ai_output.get('careSchedule', []))} items")
-        print(f"    redFlags: {len(ai_output.get('redFlags', []))} items")
-        print(f"    newGradTips: {len(ai_output.get('newGradTips', []))} items")
+        # TEST 5: Verify aiOutput completeness for one sample
+        print_test_header("5. Verify Complete aiOutput Structure")
+        if created_sample_ids:
+            # Get the first created sample patient
+            patients = get_patients()
+            sample_patient = None
+            for p in patients:
+                if p['id'] == created_sample_ids[0]:
+                    sample_patient = p
+                    break
+            
+            if sample_patient and 'aiOutput' in sample_patient:
+                ai_output = sample_patient['aiOutput']
+                print(f"Checking aiOutput for patient: {sample_patient['name']}")
+                
+                # Check all keys
+                all_keys = [
+                    'patientSummary', 'priorities', 'interventions', 'isbar',
+                    'medications', 'medicationTimes', 'vitalsTimeline', 'careSchedule',
+                    'earlyWarning', 'redFlags', 'newGradTips', 'safetyNotice'
+                ]
+                
+                missing = []
+                for key in all_keys:
+                    if key not in ai_output:
+                        missing.append(key)
+                    else:
+                        print(f"  ✅ {key}: present")
+                
+                # Check isbar sections
+                if 'isbar' in ai_output:
+                    isbar_sections = ['identify', 'situation', 'background', 'assessment', 'recommendation']
+                    for section in isbar_sections:
+                        if section in ai_output['isbar']:
+                            print(f"  ✅ isbar.{section}: present")
+                        else:
+                            missing.append(f'isbar.{section}')
+                
+                # Check earlyWarning fields
+                if 'earlyWarning' in ai_output:
+                    ew_fields = ['score', 'riskLevel', 'trend', 'rationale', 'escalation']
+                    for field in ew_fields:
+                        if field in ai_output['earlyWarning']:
+                            print(f"  ✅ earlyWarning.{field}: {ai_output['earlyWarning'][field]}")
+                        else:
+                            missing.append(f'earlyWarning.{field}')
+                
+                # Check ewHistory
+                if 'ewHistory' in sample_patient:
+                    print(f"  ✅ ewHistory: array with {len(sample_patient['ewHistory'])} entries")
+                else:
+                    missing.append('ewHistory')
+                
+                if not missing:
+                    print_result(True, "All required aiOutput keys and ewHistory present")
+                else:
+                    print_result(False, f"Missing keys: {', '.join(missing)}")
+            else:
+                print_result(False, "Could not retrieve sample patient for validation")
         
-        # Check earlyWarning structure
-        early_warning = ai_output.get('earlyWarning', {})
-        ew_keys = ['score', 'riskLevel', 'trend', 'rationale', 'escalation']
-        ew_ok = all(k in early_warning for k in ew_keys)
-        print(f"    earlyWarning (5 fields): {'✅' if ew_ok else '❌'}")
+        # TEST 6: Max-4 enforcement
+        print_test_header("6. Test Max-4 Patient Enforcement")
+        current_patients = get_patients()
+        current_count = len(current_patients)
+        print(f"Current patient count: {current_count}")
         
-        print("\n" + "="*80)
-        print("✅ ALL TESTS PASSED - ewHistory accumulation working correctly")
-        print("="*80)
-        print("\nSummary:")
-        print("  ✅ ewHistory accumulates on each generate (length 1 → 2)")
-        print("  ✅ ewHistory entries have correct structure (t, score, risk, riskValue)")
-        print("  ✅ careDone resets to {} on each generate")
-        print("  ✅ All 12 aiOutput keys present and valid")
+        # Create samples until we reach 4
+        while current_count < 4:
+            print(f"Creating sample to reach max capacity ({current_count}/4)...")
+            result = create_sample_patient('chf')
+            if result['status_code'] == 200:
+                created_sample_ids.append(result['data']['id'])
+                current_count += 1
+                print(f"  ✅ Created sample patient (now {current_count}/4)")
+            else:
+                print_result(False, f"Failed to create sample: {result['status_code']}")
+                break
         
-        return True
+        # Now try to create one more (should fail with 400)
+        if current_count == 4:
+            print(f"Attempting to create 5th patient (should fail)...")
+            result = create_sample_patient('sepsis')
+            
+            if result['status_code'] == 400:
+                error_msg = result['data'].get('error', '')
+                print(f"✅ Status: 400 (as expected)")
+                print(f"Error message: {error_msg}")
+                
+                if 'full' in error_msg.lower() or 'max' in error_msg.lower():
+                    print_result(True, "Max-4 enforcement working correctly")
+                else:
+                    print_result(False, f"Error message doesn't mention capacity: {error_msg}")
+            else:
+                print_result(False, f"Expected 400, got {result['status_code']}")
+        else:
+            print_result(False, f"Could not reach max capacity (stuck at {current_count}/4)")
         
     except Exception as e:
-        print(f"\n❌ TEST FAILED WITH EXCEPTION: {str(e)}")
+        print(f"\n❌ TEST SUITE ERROR: {str(e)}")
         import traceback
         traceback.print_exc()
-        return False
-        
+    
     finally:
-        # Step 7: Cleanup - delete test patient
-        if patient_id:
-            print(f"\nStep 7: Cleanup - Deleting test patient '{patient_id}'...")
-            try:
-                response = requests.delete(f"{BASE_URL}/patients/{patient_id}", timeout=30)
-                if response.status_code == 200:
-                    print(f"  ✅ Test patient 'EWHist Test' deleted successfully")
-                else:
-                    print(f"  ⚠️  Warning: Could not delete test patient (status {response.status_code})")
-            except Exception as e:
-                print(f"  ⚠️  Warning: Error during cleanup: {str(e)}")
+        # CLEANUP: Delete all created sample patients
+        print_test_header("CLEANUP: Deleting Created Sample Patients")
         
-        # Verify patient "m" still exists
-        print("\nVerifying patient 'm' was preserved...")
-        try:
-            response = requests.get(f"{BASE_URL}/patients", timeout=30)
-            if response.status_code == 200:
-                patients = response.json()
-                m_patient = next((p for p in patients if p.get('name') == 'm'), None)
-                if m_patient:
-                    print(f"  ✅ Patient 'm' preserved (ID: {m_patient.get('id')})")
+        # Get current patients to identify samples
+        all_patients = get_patients()
+        
+        for patient in all_patients:
+            patient_id = patient.get('id')
+            patient_name = patient.get('name', '')
+            is_sample = patient.get('isSample', False)
+            
+            # Delete if it's a sample we created OR if it's marked as isSample
+            # BUT preserve patient 'm'
+            if patient_name == 'm':
+                print(f"  ⚠️  Preserving patient 'm' (ID: {patient_id})")
+                continue
+            
+            if patient_id in created_sample_ids or is_sample:
+                print(f"  Deleting sample patient: {patient_name} (ID: {patient_id})")
+                if delete_patient(patient_id):
+                    print(f"    ✅ Deleted successfully")
                 else:
-                    print(f"  ⚠️  Warning: Patient 'm' not found")
+                    print(f"    ❌ Failed to delete")
+        
+        # Final count
+        final_patients = get_patients()
+        final_count = len(final_patients)
+        print(f"\nFinal patient count: {final_count}")
+        
+        # Verify patient 'm' still exists if it was there initially
+        if patient_m:
+            m_still_exists = any(p.get('name') == 'm' for p in final_patients)
+            if m_still_exists:
+                print_result(True, "Patient 'm' preserved successfully")
             else:
-                print(f"  ⚠️  Warning: Could not verify patients (status {response.status_code})")
-        except Exception as e:
-            print(f"  ⚠️  Warning: Error verifying patient 'm': {str(e)}")
+                print_result(False, "Patient 'm' was accidentally deleted!")
+        
+        print(f"\n{'#'*80}")
+        print("# Test Suite Complete")
+        print(f"{'#'*80}\n")
 
-if __name__ == "__main__":
-    success = test_ewhistory_accumulation()
-    exit(0 if success else 1)
+if __name__ == '__main__':
+    main()

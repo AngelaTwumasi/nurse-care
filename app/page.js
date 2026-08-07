@@ -150,17 +150,34 @@ function TutorialDialog({ open, onOpenChange }) {
 }
 
 /* ------------------------ Add Patient ------------------------ */
-function AddPatientDialog({ onAdd, disabled, trigger }) {
+function AddPatientDialog({ onAdd, disabled, trigger, reload }) {
   const [open, setOpen] = useState(false)
   const [form, setForm] = useState({ name: '', bed: '', age: '', diagnosis: '' })
   const [saving, setSaving] = useState(false)
+  const [category, setCategory] = useState('careplan')
+  const [files, setFiles] = useState([])
 
   const submit = async () => {
     if (!form.name.trim()) { toast.error('Please enter a patient name'); return }
     setSaving(true)
     try {
-      await onAdd(form)
+      const p = await onAdd(form)
+      if (files.length && p?.id) {
+        const documents = []
+        for (const f of files) {
+          if (f.size > 12 * 1024 * 1024) { toast.error(`${f.name} is too large (max 12MB)`); continue }
+          const dataUrl = await fileToDataUrl(f)
+          documents.push({ name: f.name, category, kind: 'file', mimeType: f.type, dataUrl })
+        }
+        if (documents.length) {
+          await api(`/patients/${p.id}/documents`, { method: 'POST', body: JSON.stringify({ documents }) })
+          toast.success(`${documents.length} document${documents.length > 1 ? 's' : ''} attached`)
+          if (reload) await reload()
+        }
+      }
       setForm({ name: '', bed: '', age: '', diagnosis: '' })
+      setFiles([])
+      setCategory('careplan')
       setOpen(false)
     } catch (e) { toast.error(e.message) } finally { setSaving(false) }
   }
@@ -198,6 +215,22 @@ function AddPatientDialog({ onAdd, disabled, trigger }) {
             <Label>Diagnosis / reason for admission</Label>
             <Textarea value={form.diagnosis} onChange={(e) => setForm({ ...form, diagnosis: e.target.value })} placeholder="e.g. Congestive heart failure exacerbation" rows={2} />
           </div>
+          <div className="space-y-1.5 rounded-lg border bg-muted/30 p-3">
+            <Label className="text-xs uppercase tracking-wide text-muted-foreground">Attach a document (optional)</Label>
+            <Select value={category} onValueChange={setCategory}>
+              <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {Object.entries(CATEGORIES).map(([k, v]) => (
+                  <SelectItem key={k} value={k}>{v.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <label className="flex cursor-pointer items-center gap-2 rounded-md border border-dashed p-2.5 text-sm transition-colors hover:bg-accent/50">
+              <FileUp className="h-4 w-4 shrink-0 text-primary" />
+              <span className="truncate">{files.length ? `${files.length} file${files.length > 1 ? 's' : ''} selected` : 'Choose PDF or image to upload'}</span>
+              <input type="file" multiple accept="application/pdf,image/*" className="hidden" onChange={(e) => setFiles(Array.from(e.target.files || []))} />
+            </label>
+          </div>
         </div>
         <DialogFooter>
           <Button onClick={submit} disabled={saving} className="gap-2">
@@ -210,7 +243,7 @@ function AddPatientDialog({ onAdd, disabled, trigger }) {
 }
 
 /* ------------------------ Patient Card ------------------------ */
-function PatientCard({ patient, index, onOpen }) {
+function PatientCard({ patient, index, onOpen, onPopulate, generating }) {
   const docCount = patient.documents?.length || 0
   const hasAI = !!patient.aiOutput
   return (
@@ -241,9 +274,17 @@ function PatientCard({ patient, index, onOpen }) {
           {patient.diagnosis || 'No diagnosis recorded yet.'}
         </p>
         <Separator className="my-3" />
-        <div className="flex items-center justify-between text-xs text-muted-foreground">
-          <span className="inline-flex items-center gap-1"><FileText className="h-3.5 w-3.5" /> {docCount} document{docCount !== 1 ? 's' : ''}</span>
-          <span className="text-primary font-medium inline-flex items-center gap-1">Open <ArrowLeft className="h-3.5 w-3.5 rotate-180" /></span>
+        <div className="flex items-center justify-between gap-2">
+          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><FileText className="h-3.5 w-3.5" /> {docCount} doc{docCount !== 1 ? 's' : ''}</span>
+          <Button
+            size="sm"
+            variant={hasAI ? 'outline' : 'default'}
+            className="h-8 gap-1.5"
+            disabled={generating}
+            onClick={(e) => { e.stopPropagation(); onPopulate(patient.id) }}
+          >
+            {generating ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Populating…</> : <><Sparkles className="h-3.5 w-3.5" /> {hasAI ? 'Update' : 'Populate'}</>}
+          </Button>
         </div>
       </CardContent>
     </Card>
@@ -1079,6 +1120,7 @@ function App() {
   const [selectedId, setSelectedId] = useState(null)
   const [tutorialOpen, setTutorialOpen] = useState(false)
   const [boardOpen, setBoardOpen] = useState(false)
+  const [generatingId, setGeneratingId] = useState(null)
 
   const load = useCallback(async () => {
     try {
@@ -1100,6 +1142,16 @@ function App() {
     const p = await api('/patients', { method: 'POST', body: JSON.stringify(form) })
     setPatients((prev) => [...prev, p])
     toast.success(`${p.name} added to your shift`)
+    return p
+  }
+
+  const populatePatient = async (id) => {
+    setGeneratingId(id)
+    try {
+      await api(`/patients/${id}/generate`, { method: 'POST' })
+      await load()
+      toast.success('Nursing cares populated')
+    } catch (e) { toast.error(e.message) } finally { setGeneratingId(null) }
   }
 
   const deletePatient = async (id) => {
@@ -1122,13 +1174,20 @@ function App() {
       <header className="sticky top-0 z-30 border-b bg-card/80 backdrop-blur">
         <div className="container flex h-16 items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-              <Stethoscope className="h-5 w-5" />
-            </div>
-            <div>
-              <h1 className="text-lg font-bold leading-none tracking-tight">NurseCare</h1>
-              <p className="text-[11px] text-muted-foreground">AI care plans for new grads</p>
-            </div>
+            {selected && (
+              <Button variant="ghost" size="icon" className="h-9 w-9 -ml-1" onClick={() => setSelectedId(null)} aria-label="Back to shift">
+                <ArrowLeft className="h-5 w-5" />
+              </Button>
+            )}
+            <button className="flex items-center gap-2.5" onClick={() => setSelectedId(null)}>
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+                <Stethoscope className="h-5 w-5" />
+              </div>
+              <div className="text-left">
+                <h1 className="text-lg font-bold leading-none tracking-tight">NurseCare</h1>
+                <p className="text-[11px] text-muted-foreground">AI care plans for new grads</p>
+              </div>
+            </button>
           </div>
           <div className="flex items-center gap-2">
             {patients.length > 0 && (
@@ -1161,7 +1220,7 @@ function App() {
                 <h2 className="text-2xl font-bold tracking-tight">Your shift</h2>
                 <p className="text-sm text-muted-foreground">{patients.length} of {MAX_PATIENTS} patients · tap a patient to manage documents & generate cares</p>
               </div>
-              <AddPatientDialog onAdd={addPatient} disabled={patients.length >= MAX_PATIENTS} />
+              <AddPatientDialog onAdd={addPatient} reload={load} disabled={patients.length >= MAX_PATIENTS} />
             </div>
 
             {patients.length === 0 ? (
@@ -1171,7 +1230,7 @@ function App() {
                     <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-accent"><GraduationCap className="h-6 w-6 text-primary" /></div>
                     <h3 className="text-xl font-bold">Start your shift</h3>
                     <p className="mt-2 text-sm text-muted-foreground">Add your first patient, upload their care plan, medications, vitals and allied health notes, and let NurseCare generate your nursing cares, priorities and ISBAR handover.</p>
-                    <div className="mt-4"><AddPatientDialog onAdd={addPatient} disabled={false} /></div>
+                    <div className="mt-4"><AddPatientDialog onAdd={addPatient} reload={load} disabled={false} /></div>
                   </div>
                   <div className="relative min-h-[220px]">
                     <img src={HERO_IMG} alt="Nurse" className="absolute inset-0 h-full w-full object-cover" />
@@ -1181,12 +1240,13 @@ function App() {
             ) : (
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 {patients.map((p, i) => (
-                  <PatientCard key={p.id} patient={p} index={i} onOpen={setSelectedId} />
+                  <PatientCard key={p.id} patient={p} index={i} onOpen={setSelectedId} onPopulate={populatePatient} generating={generatingId === p.id} />
                 ))}
                 {Array.from({ length: MAX_PATIENTS - patients.length }).map((_, i) => (
                   <AddPatientDialog
                     key={`empty-${i}`}
                     onAdd={addPatient}
+                    reload={load}
                     disabled={false}
                     trigger={
                       <button className="flex min-h-[168px] w-full flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-border text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary">

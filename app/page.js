@@ -184,8 +184,7 @@ function TutorialDialog({ open, onOpenChange }) {
 }
 
 /* ------------------------ Add Patient ------------------------ */
-function AddPatientDialog({ onAdd, disabled, trigger, reload }) {
-  const [open, setOpen] = useState(false)
+function PatientForm({ onAdd, reload, onSuccess, submitLabel = 'Add patient' }) {
   const [form, setForm] = useState({ name: '', bed: '', age: '', diagnosis: '' })
   const [saving, setSaving] = useState(false)
   const [category, setCategory] = useState('careplan')
@@ -212,10 +211,57 @@ function AddPatientDialog({ onAdd, disabled, trigger, reload }) {
       setForm({ name: '', bed: '', age: '', diagnosis: '' })
       setFiles([])
       setCategory('careplan')
-      setOpen(false)
+      if (onSuccess) onSuccess(p)
     } catch (e) { toast.error(e.message) } finally { setSaving(false) }
   }
 
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1.5">
+        <Label>Patient name *</Label>
+        <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. John Doe" />
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1.5">
+          <Label>Bed / Room</Label>
+          <Input value={form.bed} onChange={(e) => setForm({ ...form, bed: e.target.value })} placeholder="e.g. Bed 12" />
+        </div>
+        <div className="space-y-1.5">
+          <Label>Age</Label>
+          <Input value={form.age} onChange={(e) => setForm({ ...form, age: e.target.value })} placeholder="e.g. 72" />
+        </div>
+      </div>
+      <div className="space-y-1.5">
+        <Label>Diagnosis / reason for admission</Label>
+        <Textarea value={form.diagnosis} onChange={(e) => setForm({ ...form, diagnosis: e.target.value })} placeholder="e.g. Congestive heart failure exacerbation" rows={2} />
+      </div>
+      <div className="space-y-1.5 rounded-lg border bg-muted/30 p-3">
+        <Label className="text-xs uppercase tracking-wide text-muted-foreground">Attach a document (optional)</Label>
+        <Select value={category} onValueChange={setCategory}>
+          <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {Object.entries(CATEGORIES).map(([k, v]) => (
+              <SelectItem key={k} value={k}>{v.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <label className="flex cursor-pointer items-center gap-2 rounded-md border border-dashed p-2.5 text-sm transition-colors hover:bg-accent/50">
+          <FileUp className="h-4 w-4 shrink-0 text-primary" />
+          <span className="truncate">{files.length ? `${files.length} file${files.length > 1 ? 's' : ''} selected` : 'Choose PDF or image to upload'}</span>
+          <input type="file" multiple accept="application/pdf,image/*" className="hidden" onChange={(e) => setFiles(Array.from(e.target.files || []))} />
+        </label>
+      </div>
+      <div className="flex justify-end pt-1">
+        <Button onClick={submit} disabled={saving} className="gap-2">
+          {saving && <Loader2 className="h-4 w-4 animate-spin" />} {submitLabel}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function AddPatientDialog({ onAdd, disabled, trigger, reload }) {
+  const [open, setOpen] = useState(false)
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
@@ -230,47 +276,7 @@ function AddPatientDialog({ onAdd, disabled, trigger, reload }) {
           <DialogTitle>Add patient to your load</DialogTitle>
           <DialogDescription>Basic details help the AI tailor the care plan.</DialogDescription>
         </DialogHeader>
-        <div className="space-y-3">
-          <div className="space-y-1.5">
-            <Label>Patient name *</Label>
-            <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. John Doe" />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label>Bed / Room</Label>
-              <Input value={form.bed} onChange={(e) => setForm({ ...form, bed: e.target.value })} placeholder="e.g. Bed 12" />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Age</Label>
-              <Input value={form.age} onChange={(e) => setForm({ ...form, age: e.target.value })} placeholder="e.g. 72" />
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <Label>Diagnosis / reason for admission</Label>
-            <Textarea value={form.diagnosis} onChange={(e) => setForm({ ...form, diagnosis: e.target.value })} placeholder="e.g. Congestive heart failure exacerbation" rows={2} />
-          </div>
-          <div className="space-y-1.5 rounded-lg border bg-muted/30 p-3">
-            <Label className="text-xs uppercase tracking-wide text-muted-foreground">Attach a document (optional)</Label>
-            <Select value={category} onValueChange={setCategory}>
-              <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {Object.entries(CATEGORIES).map(([k, v]) => (
-                  <SelectItem key={k} value={k}>{v.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <label className="flex cursor-pointer items-center gap-2 rounded-md border border-dashed p-2.5 text-sm transition-colors hover:bg-accent/50">
-              <FileUp className="h-4 w-4 shrink-0 text-primary" />
-              <span className="truncate">{files.length ? `${files.length} file${files.length > 1 ? 's' : ''} selected` : 'Choose PDF or image to upload'}</span>
-              <input type="file" multiple accept="application/pdf,image/*" className="hidden" onChange={(e) => setFiles(Array.from(e.target.files || []))} />
-            </label>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button onClick={submit} disabled={saving} className="gap-2">
-            {saving && <Loader2 className="h-4 w-4 animate-spin" />} Add patient
-          </Button>
-        </DialogFooter>
+        <PatientForm onAdd={onAdd} reload={reload} onSuccess={() => setOpen(false)} />
       </DialogContent>
     </Dialog>
   )
@@ -1536,18 +1542,19 @@ function App() {
             </div>
 
             {patients.length === 0 ? (
-              <Card className="overflow-hidden">
-                <div className="grid md:grid-cols-2">
-                  <div className="flex flex-col justify-center p-8">
-                    <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-accent"><GraduationCap className="h-6 w-6 text-primary" /></div>
-                    <h3 className="text-xl font-bold">Start your shift</h3>
-                    <p className="mt-2 text-sm text-muted-foreground">Add your first patient, upload their care plan, medications, vitals and allied health notes, and let NurseCare generate your nursing cares, priorities and ISBAR handover.</p>
-                    <div className="mt-4"><AddPatientDialog onAdd={addPatient} reload={load} disabled={false} /></div>
-                  </div>
-                  <div className="relative min-h-[220px]">
-                    <img src={HERO_IMG} alt="Nurse" className="absolute inset-0 h-full w-full object-cover" />
+              <Card className="mx-auto max-w-lg overflow-hidden">
+                <div className="relative h-28 w-full">
+                  <img src={HERO_IMG} alt="Nurse" className="h-full w-full object-cover" />
+                  <div className="absolute inset-0 bg-gradient-to-t from-primary/85 to-primary/25" />
+                  <div className="absolute bottom-3 left-4 flex items-center gap-2 text-white">
+                    <GraduationCap className="h-5 w-5" />
+                    <span className="text-lg font-bold tracking-tight">Start your shift</span>
                   </div>
                 </div>
+                <CardContent className="pt-5">
+                  <p className="mb-4 text-sm text-muted-foreground">Add your first patient below. You can attach their care plan, meds, vitals or allied-health notes now, or add them later — then tap <b>Populate</b> to generate the nursing cares.</p>
+                  <PatientForm onAdd={addPatient} reload={load} />
+                </CardContent>
               </Card>
             ) : (
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">

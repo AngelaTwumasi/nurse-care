@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
@@ -25,8 +25,12 @@ import {
   ClipboardList, Sparkles, ArrowLeft, GraduationCap, ShieldAlert, ListChecks,
   ClipboardCheck, Loader2, BookOpen, User, BedDouble, AlertTriangle, Lightbulb,
   CheckCircle2, FileUp, StickyNote, X, Download, Copy, Clock, TrendingUp,
-  TrendingDown, Minus, Gauge, Siren,
+  TrendingDown, Minus, Gauge, Siren, Volume2, Square, LayoutGrid,
 } from 'lucide-react'
+import { Switch } from '@/components/ui/switch'
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer, Legend,
+} from 'recharts'
 
 const HERO_IMG = 'https://images.pexels.com/photos/4021772/pexels-photo-4021772.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940'
 
@@ -389,6 +393,50 @@ function DeteriorationAlert({ ew }) {
   )
 }
 
+function vnum(v) {
+  if (v == null) return null
+  const m = String(v).match(/-?\d+(\.\d+)?/)
+  return m ? parseFloat(m[0]) : null
+}
+function parseVitalsSeries(vitals) {
+  return (vitals || []).map((v) => {
+    const bp = v.bp ? String(v.bp).split('/') : []
+    return {
+      time: v.time || '',
+      HR: vnum(v.hr),
+      RR: vnum(v.rr),
+      SpO2: vnum(v.spo2),
+      Temp: vnum(v.temp),
+      SysBP: bp.length ? vnum(bp[0]) : null,
+    }
+  })
+}
+function VitalsTrendChart({ vitals }) {
+  const data = parseVitalsSeries(vitals)
+  const hasData = data.length >= 2 && data.some((d) => d.HR || d.RR || d.SpO2 || d.SysBP)
+  if (!hasData) return null
+  return (
+    <div className="mb-4">
+      <h4 className="mb-2 flex items-center gap-2 text-sm font-semibold"><TrendingUp className="h-4 w-4 text-primary" /> Vitals trend</h4>
+      <div className="rounded-lg border bg-card p-3" style={{ height: 240 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={data} margin={{ top: 5, right: 12, left: -12, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+            <XAxis dataKey="time" fontSize={11} tickLine={false} />
+            <YAxis fontSize={11} tickLine={false} width={34} />
+            <RTooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <Line type="monotone" dataKey="HR" stroke="hsl(var(--chart-1))" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+            <Line type="monotone" dataKey="SysBP" name="Sys BP" stroke="hsl(var(--chart-3))" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+            <Line type="monotone" dataKey="RR" stroke="hsl(var(--chart-4))" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+            <Line type="monotone" dataKey="SpO2" name="SpO2" stroke="hsl(var(--chart-2))" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  )
+}
+
 function VitalsTimeline({ vitals = [], meds = [] }) {
   const hasVitals = vitals.length > 0
   const hasMeds = meds.length > 0
@@ -402,6 +450,7 @@ function VitalsTimeline({ vitals = [], meds = [] }) {
   ) : null
   return (
     <div className="space-y-5">
+      {hasVitals && <VitalsTrendChart vitals={vitals} />}
       {hasVitals && (
         <div>
           <h4 className="mb-3 flex items-center gap-2 text-sm font-semibold"><Activity className="h-4 w-4 text-rose-600" /> Vital signs over the shift</h4>
@@ -533,21 +582,46 @@ function downloadHandoverPDF(patient, ai) {
 }
 
 function AIResults({ ai, patient, generatedAt }) {
+  const [speaking, setSpeaking] = useState(false)
+
+  useEffect(() => () => {
+    if (typeof window !== 'undefined' && window.speechSynthesis) window.speechSynthesis.cancel()
+  }, [])
+
   const copyHandover = async () => {
     try {
       await navigator.clipboard.writeText(buildHandoverText(patient, ai))
       toast.success('Handover copied to clipboard')
     } catch (e) { toast.error('Could not copy') }
   }
+
+  const speakISBAR = () => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) { toast.error('Voice not supported in this browser'); return }
+    if (speaking) { window.speechSynthesis.cancel(); setSpeaking(false); return }
+    const s = ai.isbar || {}
+    const text = `Handover for ${patient.name || 'the patient'}, ${patient.bed || ''}. Identify. ${s.identify || ''}. Situation. ${s.situation || ''}. Background. ${s.background || ''}. Assessment. ${s.assessment || ''}. Recommendation. ${s.recommendation || ''}.`
+    const u = new SpeechSynthesisUtterance(text)
+    u.rate = 0.98
+    u.onend = () => setSpeaking(false)
+    u.onerror = () => setSpeaking(false)
+    window.speechSynthesis.cancel()
+    window.speechSynthesis.speak(u)
+    setSpeaking(true)
+    toast.success('Reading ISBAR aloud')
+  }
+
   return (
     <div className="space-y-4">
       <DeteriorationAlert ew={ai.earlyWarning} />
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-muted-foreground">{generatedAt ? `Generated ${new Date(generatedAt).toLocaleString()}` : ''}</p>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" className="gap-2" onClick={copyHandover}><Copy className="h-4 w-4" /> Copy handover</Button>
-          <Button size="sm" className="gap-2" onClick={() => downloadHandoverPDF(patient, ai)}><Download className="h-4 w-4" /> Download PDF</Button>
+        <div className="flex flex-wrap gap-2">
+          <Button variant={speaking ? 'default' : 'outline'} size="sm" className="gap-2" onClick={speakISBAR}>
+            {speaking ? <><Square className="h-4 w-4" /> Stop</> : <><Volume2 className="h-4 w-4" /> Read ISBAR</>}
+          </Button>
+          <Button variant="outline" size="sm" className="gap-2" onClick={copyHandover}><Copy className="h-4 w-4" /> Copy</Button>
+          <Button size="sm" className="gap-2" onClick={() => downloadHandoverPDF(patient, ai)}><Download className="h-4 w-4" /> PDF</Button>
         </div>
       </div>
 
@@ -682,6 +756,35 @@ function AIResults({ ai, patient, generatedAt }) {
 function PatientDetail({ patient, onBack, refresh, onDelete }) {
   const [busy, setBusy] = useState(false)
   const [generating, setGenerating] = useState(false)
+  const [autoRefresh, setAutoRefresh] = useState(true)
+  const autoRef = useRef(true)
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const v = localStorage.getItem('nursecare_autorefresh')
+      const on = v === null ? true : v === '1'
+      setAutoRefresh(on); autoRef.current = on
+    }
+  }, [])
+
+  const toggleAuto = (on) => {
+    setAutoRefresh(on); autoRef.current = on
+    if (typeof window !== 'undefined') localStorage.setItem('nursecare_autorefresh', on ? '1' : '0')
+  }
+
+  const generate = async (silent) => {
+    setGenerating(true)
+    try {
+      await api(`/patients/${patient.id}/generate`, { method: 'POST' })
+      toast.success(silent ? 'Cares auto-updated with new document' : 'Nursing care plan generated')
+      await refresh()
+    } catch (e) { toast.error(e.message) } finally { setGenerating(false) }
+  }
+
+  const afterDocChange = async () => {
+    await refresh()
+    if (autoRef.current) await generate(true)
+  }
 
   const uploadFiles = async (files, category) => {
     setBusy(true)
@@ -695,7 +798,7 @@ function PatientDetail({ patient, onBack, refresh, onDelete }) {
       if (!documents.length) return
       await api(`/patients/${patient.id}/documents`, { method: 'POST', body: JSON.stringify({ documents }) })
       toast.success(`${documents.length} document${documents.length > 1 ? 's' : ''} added`)
-      await refresh()
+      await afterDocChange()
     } catch (e) { toast.error(e.message) } finally { setBusy(false) }
   }
 
@@ -704,7 +807,7 @@ function PatientDetail({ patient, onBack, refresh, onDelete }) {
     try {
       await api(`/patients/${patient.id}/documents`, { method: 'POST', body: JSON.stringify({ documents: [{ name, category, kind: 'text', textContent }] }) })
       toast.success('Note saved')
-      await refresh()
+      await afterDocChange()
     } catch (e) { toast.error(e.message) } finally { setBusy(false) }
   }
 
@@ -713,15 +816,6 @@ function PatientDetail({ patient, onBack, refresh, onDelete }) {
       await api(`/patients/${patient.id}/documents/${docId}`, { method: 'DELETE' })
       await refresh()
     } catch (e) { toast.error(e.message) }
-  }
-
-  const generate = async () => {
-    setGenerating(true)
-    try {
-      await api(`/patients/${patient.id}/generate`, { method: 'POST' })
-      toast.success('Nursing care plan generated')
-      await refresh()
-    } catch (e) { toast.error(e.message) } finally { setGenerating(false) }
   }
 
   return (
@@ -774,14 +868,22 @@ function PatientDetail({ patient, onBack, refresh, onDelete }) {
         {/* Right: AI */}
         <div className="space-y-4 lg:col-span-3">
           <Card className="bg-gradient-to-br from-primary to-teal-600 text-primary-foreground">
-            <CardContent className="flex flex-wrap items-center justify-between gap-3 py-5">
-              <div>
-                <p className="flex items-center gap-2 text-lg font-semibold"><Sparkles className="h-5 w-5" /> AI Nursing Cares</p>
-                <p className="text-sm text-primary-foreground/80">Reads every document and builds priorities, interventions & ISBAR.</p>
+            <CardContent className="py-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="flex items-center gap-2 text-lg font-semibold"><Sparkles className="h-5 w-5" /> AI Nursing Cares</p>
+                  <p className="text-sm text-primary-foreground/80">Reads every document and builds priorities, interventions & ISBAR.</p>
+                </div>
+                <Button size="lg" variant="secondary" onClick={() => generate(false)} disabled={generating} className="gap-2">
+                  {generating ? <><Loader2 className="h-4 w-4 animate-spin" /> Analysing…</> : <><Sparkles className="h-4 w-4" /> {patient.aiOutput ? 'Regenerate' : 'Generate'}</>}
+                </Button>
               </div>
-              <Button size="lg" variant="secondary" onClick={generate} disabled={generating} className="gap-2">
-                {generating ? <><Loader2 className="h-4 w-4 animate-spin" /> Analysing…</> : <><Sparkles className="h-4 w-4" /> {patient.aiOutput ? 'Regenerate' : 'Generate'}</>}
-              </Button>
+              <div className="mt-4 flex items-center gap-2 border-t border-white/20 pt-3">
+                <Switch checked={autoRefresh} onCheckedChange={toggleAuto} id="auto-refresh" className="data-[state=checked]:bg-white/90 data-[state=unchecked]:bg-white/30" />
+                <label htmlFor="auto-refresh" className="cursor-pointer text-sm text-primary-foreground/90">
+                  Auto-refresh cares when I add a document
+                </label>
+              </div>
             </CardContent>
           </Card>
 
@@ -808,12 +910,73 @@ function PatientDetail({ patient, onBack, refresh, onDelete }) {
   )
 }
 
+function riskBadgeCls(level) {
+  return level === 'high' ? 'bg-red-100 text-red-700'
+    : level === 'medium' ? 'bg-amber-100 text-amber-700'
+    : level === 'low' ? 'bg-emerald-100 text-emerald-700'
+    : 'bg-muted text-muted-foreground'
+}
+
+function ShiftBoard({ open, onOpenChange, patients, onOpenPatient }) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-5xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><LayoutGrid className="h-5 w-5 text-primary" /> Shift board</DialogTitle>
+          <DialogDescription>All your patients at a glance — early-warning scores and top priorities.</DialogDescription>
+        </DialogHeader>
+        {patients.length === 0 ? (
+          <p className="py-8 text-center text-sm text-muted-foreground">No patients on your shift yet.</p>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {patients.map((p) => {
+              const ew = p.aiOutput?.earlyWarning
+              const pri = p.aiOutput?.priorities || []
+              return (
+                <div key={p.id} className="flex flex-col rounded-lg border bg-card p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-sm font-semibold">{p.name}</span>
+                    <span className="shrink-0 text-xs text-muted-foreground">{p.bed || ''}</span>
+                  </div>
+                  {ew ? (
+                    <div className={`mt-2 flex items-center justify-between rounded-md px-2 py-1 text-xs font-semibold ${riskBadgeCls(ew.riskLevel)}`}>
+                      <span>EWS {ew.score ?? 'N/A'}</span>
+                      <span className="inline-flex items-center gap-1"><TrendIcon trend={ew.trend} className="h-3 w-3" />{ew.trend || ''}</span>
+                    </div>
+                  ) : (
+                    <div className="mt-2 rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">No cares generated</div>
+                  )}
+                  <div className="mt-2 flex-1">
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Top priorities</p>
+                    {pri.length ? (
+                      <ol className="mt-1 space-y-1 text-xs">
+                        {pri.slice(0, 3).map((x, idx) => (
+                          <li key={idx} className="flex gap-1.5">
+                            <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${x.urgency === 'urgent' ? 'bg-red-500' : x.urgency === 'soon' ? 'bg-amber-500' : 'bg-emerald-500'}`} />
+                            <span className="line-clamp-2">{x.priority}</span>
+                          </li>
+                        ))}
+                      </ol>
+                    ) : <p className="mt-1 text-xs text-muted-foreground">—</p>}
+                  </div>
+                  <Button variant="outline" size="sm" className="mt-3 w-full" onClick={() => { onOpenChange(false); onOpenPatient(p.id) }}>Open</Button>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 /* ------------------------ Main App ------------------------ */
 function App() {
   const [patients, setPatients] = useState([])
   const [loading, setLoading] = useState(true)
   const [selectedId, setSelectedId] = useState(null)
   const [tutorialOpen, setTutorialOpen] = useState(false)
+  const [boardOpen, setBoardOpen] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -851,6 +1014,7 @@ function App() {
   return (
     <div className="min-h-screen bg-gradient-to-b from-accent/30 to-background">
       <TutorialDialog open={tutorialOpen} onOpenChange={setTutorialOpen} />
+      <ShiftBoard open={boardOpen} onOpenChange={setBoardOpen} patients={patients} onOpenPatient={setSelectedId} />
 
       {/* Header */}
       <header className="sticky top-0 z-30 border-b bg-card/80 backdrop-blur">
@@ -864,9 +1028,16 @@ function App() {
               <p className="text-[11px] text-muted-foreground">AI care plans for new grads</p>
             </div>
           </div>
-          <Button variant="outline" size="sm" className="gap-2" onClick={() => setTutorialOpen(true)}>
-            <BookOpen className="h-4 w-4" /> Tutorial
-          </Button>
+          <div className="flex items-center gap-2">
+            {patients.length > 0 && (
+              <Button variant="outline" size="sm" className="gap-2" onClick={() => setBoardOpen(true)}>
+                <LayoutGrid className="h-4 w-4" /> <span className="hidden sm:inline">Shift board</span>
+              </Button>
+            )}
+            <Button variant="outline" size="sm" className="gap-2" onClick={() => setTutorialOpen(true)}>
+              <BookOpen className="h-4 w-4" /> <span className="hidden sm:inline">Tutorial</span>
+            </Button>
+          </div>
         </div>
       </header>
 

@@ -26,7 +26,7 @@ import {
   ClipboardCheck, Loader2, BookOpen, User, BedDouble, AlertTriangle, Lightbulb,
   CheckCircle2, FileUp, StickyNote, X, Download, Copy, Clock, TrendingUp,
   TrendingDown, Minus, Gauge, Siren, Volume2, Square, LayoutGrid,
-  Dumbbell, Apple, UserRound, CalendarClock, GripVertical, Users, ArrowDownWideNarrow,
+  Dumbbell, Apple, UserRound, CalendarClock, GripVertical, Users, ArrowDownWideNarrow, Printer,
 } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -81,6 +81,24 @@ function timeAgo(dateStr) {
 function isStale(dateStr, hours = 4) {
   if (!dateStr) return false
   return Date.now() - new Date(dateStr).getTime() > hours * 3600 * 1000
+}
+function parseClock(str) {
+  if (!str) return null
+  const m = String(str).match(/\b(\d{1,2}):?(\d{2})\b/)
+  if (!m) return null
+  const h = parseInt(m[1], 10), mn = parseInt(m[2], 10)
+  if (h > 23 || mn > 59) return null
+  return h * 60 + mn
+}
+function dueStatus(timeStr) {
+  const t = parseClock(timeStr)
+  if (t == null) return null
+  const now = new Date()
+  const cur = now.getHours() * 60 + now.getMinutes()
+  const delta = t - cur
+  if (delta < 0 && delta >= -120) return 'overdue'
+  if (delta >= 0 && delta <= 60) return 'soon'
+  return null
 }
 
 /* ------------------------ Tutorial ------------------------ */
@@ -315,15 +333,22 @@ function PatientCard({ patient, index, onOpen, onPopulate, generating, onDragSta
               </span>
             )}
           </div>
-          <Button
-            size="sm"
-            variant={hasAI ? 'outline' : 'default'}
-            className="h-8 gap-1.5"
-            disabled={generating}
-            onClick={(e) => { e.stopPropagation(); onPopulate(patient.id) }}
-          >
-            {generating ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Populating…</> : <><Sparkles className="h-3.5 w-3.5" /> {hasAI ? 'Update' : 'Populate'}</>}
-          </Button>
+          <div className="flex items-center gap-1.5">
+            {hasAI && (
+              <Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground" title="Print / PDF this care plan" onClick={(e) => { e.stopPropagation(); downloadHandoverPDF(patient, patient.aiOutput) }}>
+                <Printer className="h-4 w-4" />
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant={hasAI ? 'outline' : 'default'}
+              className="h-8 gap-1.5"
+              disabled={generating}
+              onClick={(e) => { e.stopPropagation(); onPopulate(patient.id) }}
+            >
+              {generating ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Populating…</> : <><Sparkles className="h-3.5 w-3.5" /> {hasAI ? 'Update' : 'Populate'}</>}
+            </Button>
+          </div>
         </div>
       </CardContent>
     </Card>
@@ -574,6 +599,32 @@ function VitalsTrendChart({ vitals }) {
   )
 }
 
+function EWTrendChart({ history }) {
+  if (!history || history.length < 2) return null
+  const data = history.map((h) => ({
+    name: new Date(h.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    Risk: h.riskValue ?? 0,
+    Score: h.score,
+  }))
+  const riskLabel = { 1: 'Low', 2: 'Med', 3: 'High' }
+  return (
+    <Card>
+      <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><TrendingUp className="h-4 w-4 text-primary" /> Warning score trend this shift</CardTitle></CardHeader>
+      <CardContent style={{ height: 190 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={data} margin={{ top: 5, right: 14, left: -18, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+            <XAxis dataKey="name" fontSize={11} tickLine={false} />
+            <YAxis domain={[0, 3]} ticks={[1, 2, 3]} tickFormatter={(v) => riskLabel[v] || ''} width={42} fontSize={11} tickLine={false} />
+            <RTooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} formatter={(val, name) => name === 'Risk' ? (riskLabel[val] || val) : val} />
+            <Line type="stepAfter" name="Risk" dataKey="Risk" stroke="hsl(var(--chart-1))" strokeWidth={2.5} dot={{ r: 3 }} />
+          </LineChart>
+        </ResponsiveContainer>
+      </CardContent>
+    </Card>
+  )
+}
+
 function VitalsTimeline({ vitals = [], meds = [], care = [], careDone = {}, onToggleCare }) {
   const hasVitals = vitals.length > 0
   const hasMeds = meds.length > 0
@@ -600,13 +651,16 @@ function VitalsTimeline({ vitals = [], meds = [], care = [], careDone = {}, onTo
             {care.map((c, i) => {
               const u = URGENCY[c.priority] || URGENCY.routine
               const done = !!careDone?.[i]
+              const ds = done ? null : dueStatus(c.time)
               return (
                 <div key={i} className="relative">
-                  <span className={`absolute -left-[15px] top-2 h-2.5 w-2.5 rounded-full ring-4 ring-background ${done ? 'bg-emerald-500' : 'bg-primary'}`} />
-                  <div className={`flex items-start gap-2 rounded-lg border bg-card p-2.5 transition-opacity ${done ? 'opacity-60' : ''}`}>
+                  <span className={`absolute -left-[15px] top-2 h-2.5 w-2.5 rounded-full ring-4 ring-background ${done ? 'bg-emerald-500' : ds === 'overdue' ? 'bg-red-500' : ds === 'soon' ? 'bg-amber-500' : 'bg-primary'}`} />
+                  <div className={`flex items-start gap-2 rounded-lg border bg-card p-2.5 transition-opacity ${done ? 'opacity-60' : ''} ${ds === 'overdue' ? 'border-red-300 bg-red-50/50' : ds === 'soon' ? 'border-amber-300 bg-amber-50/50' : ''}`}>
                     {onToggleCare && <Checkbox checked={done} onCheckedChange={() => onToggleCare(i)} className="mt-0.5" />}
                     <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-accent px-2 py-0.5 text-xs font-semibold text-primary"><Clock className="h-3 w-3" /> {c.time || '—'}</span>
                     <span className={`flex-1 text-sm ${done ? 'line-through' : ''}`}>{c.task}</span>
+                    {ds === 'soon' && <Badge variant="outline" className="shrink-0 border-amber-200 bg-amber-100 text-amber-700">Due soon</Badge>}
+                    {ds === 'overdue' && <Badge variant="outline" className="shrink-0 border-red-200 bg-red-100 text-red-700">Overdue</Badge>}
                     <Badge variant="outline" className={`shrink-0 ${u.cls}`}>{u.label}</Badge>
                   </div>
                 </div>
@@ -784,6 +838,7 @@ function AIResults({ ai, patient, generatedAt, careDone, onToggleCare }) {
   return (
     <div className="space-y-4">
       <DeteriorationAlert ew={ai.earlyWarning} />
+      <EWTrendChart history={patient?.ewHistory} />
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-muted-foreground">{generatedAt ? `Generated ${new Date(generatedAt).toLocaleString()}` : ''}</p>
@@ -873,9 +928,15 @@ function AIResults({ ai, patient, generatedAt, careDone, onToggleCare }) {
                 {(m.times || []).length > 0 && (
                   <div className="mt-2 flex flex-wrap items-center gap-1.5">
                     <span className="text-xs font-medium text-muted-foreground">Due:</span>
-                    {m.times.map((t, ti) => (
-                      <span key={ti} className="inline-flex items-center gap-1 rounded-md bg-fuchsia-100 px-2 py-0.5 text-xs font-semibold text-fuchsia-700"><Clock className="h-3 w-3" /> {t}</span>
-                    ))}
+                    {m.times.map((t, ti) => {
+                      const ds = dueStatus(t)
+                      const cls = ds === 'overdue' ? 'bg-red-100 text-red-700' : ds === 'soon' ? 'bg-amber-100 text-amber-700' : 'bg-fuchsia-100 text-fuchsia-700'
+                      return (
+                        <span key={ti} className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-semibold ${cls}`}>
+                          <Clock className="h-3 w-3" /> {t}{ds === 'soon' ? ' · soon' : ds === 'overdue' ? ' · overdue' : ''}
+                        </span>
+                      )
+                    })}
                   </div>
                 )}
                 {m.notes && <p className="mt-1 text-sm text-muted-foreground">{m.notes}</p>}
@@ -1306,10 +1367,23 @@ function App() {
     } catch { return list }
   }
 
-  const load = useCallback(async () => {
+  const rankRisk = (p) => { const r = p.aiOutput?.earlyWarning?.riskLevel; return r === 'high' ? 3 : r === 'medium' ? 2 : r === 'low' ? 1 : 0 }
+  const sortByRiskList = (list) => [...list].sort((a, b) => rankRisk(b) - rankRisk(a))
+
+  const load = useCallback(async (opts = {}) => {
     try {
       const data = await api('/patients')
-      setPatients(applyOrder(data))
+      let next
+      if (opts.sort) {
+        next = [...data].sort((a, b) => {
+          const rk = (p) => { const r = p.aiOutput?.earlyWarning?.riskLevel; return r === 'high' ? 3 : r === 'medium' ? 2 : r === 'low' ? 1 : 0 }
+          return rk(b) - rk(a)
+        })
+        try { localStorage.setItem('nursecare_order', JSON.stringify(next.map((p) => p.id))) } catch {}
+      } else {
+        next = applyOrder(data)
+      }
+      setPatients(next)
     } catch (e) { toast.error(e.message) } finally { setLoading(false) }
   }, [])
 
@@ -1333,8 +1407,8 @@ function App() {
     setGeneratingId(id)
     try {
       await api(`/patients/${id}/generate`, { method: 'POST' })
-      await load()
-      toast.success('Nursing cares populated')
+      await load({ sort: true })
+      toast.success('Nursing cares populated · sorted by risk')
     } catch (e) { toast.error(e.message) } finally { setGeneratingId(null) }
   }
 
@@ -1349,9 +1423,9 @@ function App() {
       } catch (e) { /* continue */ }
       setBulk({ done: i + 1, total: patients.length })
     }
-    await load()
+    await load({ sort: true })
     setBulk(null)
-    toast.success(`Populated ${ok} of ${patients.length} patients`)
+    toast.success(`Populated ${ok} of ${patients.length} · sorted by risk`)
   }
 
   // drag reorder
@@ -1436,7 +1510,7 @@ function App() {
           <PatientDetail
             patient={selected}
             onBack={() => setSelectedId(null)}
-            refresh={load}
+            refresh={() => load({ sort: true })}
             onDelete={deletePatient}
           />
         ) : (

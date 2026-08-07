@@ -270,9 +270,15 @@ async function handleRoute(request, { params }) {
       if (seg[2] === 'generate' && seg.length === 3 && method === 'POST') {
         const result = await generateNursingCare(patient)
         const generatedAt = new Date()
+        const prevHist = Array.isArray(patient.ewHistory) ? patient.ewHistory : []
+        const ew = result.earlyWarning || {}
+        const sm = String(ew.score ?? '').match(/-?\d+(\.\d+)?/)
+        const scoreNum = sm ? parseFloat(sm[0]) : null
+        const riskValue = ew.riskLevel === 'high' ? 3 : ew.riskLevel === 'medium' ? 2 : ew.riskLevel === 'low' ? 1 : 0
+        const ewHistory = [...prevHist, { t: generatedAt, score: scoreNum, risk: ew.riskLevel || null, riskValue }].slice(-20)
         await db.collection('patients').updateOne(
           { id },
-          { $set: { aiOutput: result, aiGeneratedAt: generatedAt, careDone: {} } }
+          { $set: { aiOutput: result, aiGeneratedAt: generatedAt, careDone: {}, ewHistory } }
         )
         return json({ aiOutput: result, aiGeneratedAt: generatedAt })
       }

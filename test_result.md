@@ -213,8 +213,8 @@ frontend:
 
 metadata:
   created_by: "main_agent"
-  version: "1.4"
-  test_sequence: 7
+  version: "1.5"
+  test_sequence: 8
   run_ui: false
 
 test_plan:
@@ -740,3 +740,87 @@ agent_communication:
       ✅ Patient "m" preserved as instructed
       
       NO CRITICAL ISSUES FOUND. All Round 7 UI features working correctly and production-ready.
+
+  - task: "EW history accumulation (ewHistory) on generate"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Each POST /generate appends {t, score(numeric|null), risk, riskValue(0-3)} to patient.ewHistory (capped 20). Powers the Warning-score trend chart. careDone still resets on generate; ewHistory ACCUMULATES."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ ROUND 8 BACKEND TEST PASSED - ewHistory accumulation fully working. Created patient 'EWHist Test' (72yo, Sepsis watch, Bed B1) with deteriorating vitals document (HR 92→118, BP 105/62→92/54, RR 22→28, SpO2 93→89%, Temp 38.2→38.9). (1) First AI generation completed in 34.0s (REAL Gemini 2.5 Pro). ewHistory is an array of length 1 with correct structure: t (timestamp), score (null), risk ('high'), riskValue (3). careDone is {} (empty) after first generate ✅. (2) Updated careDone to {'0': True} to simulate ticked task ✅. (3) Second AI generation completed in 33.9s. ewHistory length is now 2 (ACCUMULATED, not reset) ✅. Both ewHistory entries have correct structure with all required fields (t, score, risk, riskValue) ✅. careDone was RESET to {} (empty) after second generate ✅. (4) All 12 required aiOutput keys present and valid: patientSummary, priorities (1 item), interventions (4 items), isbar (5 sections), medications (0 items), medicationTimes (0 items), vitalsTimeline (2 items), careSchedule (4 items), earlyWarning (5 fields: score/riskLevel/trend/rationale/escalation), redFlags (4 items), newGradTips (4 items), safetyNotice ✅. Test patient cleaned up successfully. Patient 'm' preserved as instructed. Backend ewHistory accumulation is PRODUCTION-READY."
+
+  - task: "Auto-sort, EWS trend chart, Due-soon nudges, Print single card (frontend)"
+    implemented: true
+    working: "NA"
+    file: "/app/app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Auto-sort: after populate/populateAll/detail-generate the shift reorders highest-risk first (saved to localStorage). EWTrendChart shows riskValue step-line from ewHistory in results. Due-soon: care tasks & med due-times highlight amber 'Due soon' (next 60m) / red 'Overdue' (past 2h). Printer icon on each card calls single-patient PDF."
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      ROUND 8 — BACKEND retest for ewHistory accumulation.
+      1) Create patient; add a vitals note; POST /generate -> GET patient, confirm ewHistory is an array of length 1 with fields t, score (number or null), risk, riskValue (0-3).
+      2) POST /generate AGAIN -> confirm ewHistory length is now 2 (ACCUMULATED, not reset), while careDone was reset to {}.
+      3) Confirm aiOutput still has all keys incl earlyWarning & careSchedule.
+      Cleanup created patients; do NOT delete "m".
+    -agent: "testing"
+    -message: |
+      ✅ ROUND 8 BACKEND TEST COMPLETED - ALL TESTS PASSED
+      
+      ewHistory accumulation feature fully verified and working correctly.
+      
+      Test Execution:
+      - Created patient "EWHist Test" (72yo, Sepsis watch, Bed B1)
+      - Added vitals document with deteriorating observations (HR 92→118, BP 105/62→92/54, RR 22→28, SpO2 93→89%, Temp 38.2→38.9)
+      - AI generation: 34.0s (first), 33.9s (second) - REAL Gemini 2.5 Pro
+      
+      Test Results:
+      
+      1. ✅ FIRST GENERATE - ewHistory starts as array of length 1
+         - POST /api/patients/:id/generate completed successfully
+         - ewHistory is an array of length 1 ✅
+         - ewHistory[0] has all required fields:
+           * t: timestamp (ISO string) ✅
+           * score: null (number or null) ✅
+           * risk: "high" (string) ✅
+           * riskValue: 3 (0-3 range) ✅
+         - careDone is {} (empty) after first generate ✅
+      
+      2. ✅ PERSISTENCE - careDone persists via PUT
+         - PUT /api/patients/:id with {"careDone": {"0": true}}
+         - careDone updated successfully to {"0": true} ✅
+      
+      3. ✅ ACCUMULATION - ewHistory ACCUMULATES on second generate
+         - POST /api/patients/:id/generate (second time)
+         - ewHistory length is now 2 (ACCUMULATED, not reset) ✅
+         - Both ewHistory entries have correct structure (t, score, risk, riskValue) ✅
+         - Timestamps are different (first: 11:02:55.191Z, second: 11:03:29.529Z) ✅
+      
+      4. ✅ RESET - careDone RESETS to {} on regenerate
+         - careDone was RESET to {} (empty) after second generate ✅
+      
+      5. ✅ SCHEMA INTEGRITY - All 12 aiOutput keys present
+         - patientSummary, priorities (1), interventions (4)
+         - isbar (5 sections: identify/situation/background/assessment/recommendation)
+         - medications (0), medicationTimes (0), vitalsTimeline (2)
+         - careSchedule (4), earlyWarning (5 fields: score/riskLevel/trend/rationale/escalation)
+         - redFlags (4), newGradTips (4), safetyNotice
+      
+      Cleanup:
+      ✅ Test patient "EWHist Test" deleted successfully
+      ✅ Patient "m" preserved as instructed
+      
+      NO CRITICAL ISSUES FOUND. ewHistory accumulation feature is PRODUCTION-READY.

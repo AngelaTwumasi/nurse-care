@@ -313,11 +313,11 @@ function UploadPanel({ onUploadFiles, onAddNote, busy }) {
 }
 
 /* ------------------------ Document List ------------------------ */
-function DocumentList({ documents, onDelete }) {
+function DocumentList({ documents, onDelete, onOpen }) {
   if (!documents?.length) {
     return (
       <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-        No documents yet. Add the care plan, meds, vitals & allied health notes above.
+        No documents yet. Add the care plan, meds, vitals, doctor & allied health notes above.
       </div>
     )
   }
@@ -328,11 +328,13 @@ function DocumentList({ documents, onDelete }) {
         const Icon = cat.icon
         return (
           <div key={d.id} className="flex items-center gap-3 rounded-lg border bg-card p-3">
-            <div className="rounded-md bg-accent p-2"><Icon className={`h-4 w-4 ${cat.color}`} /></div>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium">{d.name}</p>
-              <p className="text-xs text-muted-foreground">{cat.label} · {d.kind === 'text' ? 'Note' : (d.mimeType === 'application/pdf' ? 'PDF' : 'Image')}</p>
-            </div>
+            <button className="flex min-w-0 flex-1 items-center gap-3 text-left" onClick={() => onOpen(d)}>
+              <div className="rounded-md bg-accent p-2"><Icon className={`h-4 w-4 ${cat.color}`} /></div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium hover:text-primary">{d.name}</p>
+                <p className="text-xs text-muted-foreground">{cat.label} · {d.kind === 'text' ? 'Note' : (d.mimeType === 'application/pdf' ? 'PDF' : 'Image')} · tap to open</p>
+              </div>
+            </button>
             <Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground hover:text-destructive" onClick={() => onDelete(d.id)}>
               <Trash2 className="h-4 w-4" />
             </Button>
@@ -340,6 +342,57 @@ function DocumentList({ documents, onDelete }) {
         )
       })}
     </div>
+  )
+}
+
+function DocViewer({ open, onOpenChange, documents, currentIndex, setCurrentIndex }) {
+  const d = documents[currentIndex]
+  if (!d) return null
+  const cat = CATEGORIES[d.category] || CATEGORIES.other
+  const Icon = cat.icon
+  let preview
+  if (d.kind === 'text') {
+    preview = <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap rounded-lg border bg-muted/40 p-4 text-sm leading-relaxed">{d.textContent || '(empty note)'}</pre>
+  } else if (d.mimeType && d.mimeType.startsWith('image/')) {
+    preview = <div className="flex max-h-[60vh] items-center justify-center overflow-auto rounded-lg border bg-muted/30 p-2"><img src={d.dataUrl} alt={d.name} className="max-h-[58vh] w-auto rounded" /></div>
+  } else if (d.mimeType === 'application/pdf') {
+    preview = (
+      <div className="space-y-2">
+        <iframe src={d.dataUrl} title={d.name} className="h-[60vh] w-full rounded-lg border" />
+        <a href={d.dataUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-primary hover:underline"><Download className="h-3 w-3" /> Open PDF in new tab</a>
+      </div>
+    )
+  } else {
+    preview = <div className="rounded-lg border p-6 text-center text-sm text-muted-foreground">Preview not available for this file type.</div>
+  }
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-4xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><Icon className={`h-5 w-5 ${cat.color}`} /> {d.name}</DialogTitle>
+          <DialogDescription>{cat.label} · document {currentIndex + 1} of {documents.length}</DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4 md:grid-cols-4">
+          <div className="md:col-span-3">{preview}</div>
+          <div className="max-h-[60vh] space-y-1.5 overflow-auto md:col-span-1">
+            <p className="px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">All documents</p>
+            {documents.map((doc, i) => {
+              const c = CATEGORIES[doc.category] || CATEGORIES.other
+              const DIcon = c.icon
+              return (
+                <button key={doc.id} onClick={() => setCurrentIndex(i)} className={`flex w-full items-center gap-2 rounded-md border p-2 text-left text-xs transition-colors ${i === currentIndex ? 'border-primary bg-accent' : 'hover:bg-muted'}`}>
+                  <DIcon className={`h-3.5 w-3.5 shrink-0 ${c.color}`} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium">{doc.name}</span>
+                    <span className="block text-muted-foreground">{c.label}</span>
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -798,6 +851,14 @@ function PatientDetail({ patient, onBack, refresh, onDelete }) {
   const [generating, setGenerating] = useState(false)
   const [autoRefresh, setAutoRefresh] = useState(true)
   const autoRef = useRef(true)
+  const [viewerOpen, setViewerOpen] = useState(false)
+  const [viewIndex, setViewIndex] = useState(0)
+
+  const openDoc = (doc) => {
+    const idx = (patient.documents || []).findIndex((x) => x.id === doc.id)
+    setViewIndex(idx < 0 ? 0 : idx)
+    setViewerOpen(true)
+  }
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -860,6 +921,7 @@ function PatientDetail({ patient, onBack, refresh, onDelete }) {
 
   return (
     <div className="space-y-5">
+      <DocViewer open={viewerOpen} onOpenChange={setViewerOpen} documents={patient.documents || []} currentIndex={viewIndex} setCurrentIndex={setViewIndex} />
       <div className="flex items-center justify-between">
         <Button variant="ghost" onClick={onBack} className="gap-2 -ml-2"><ArrowLeft className="h-4 w-4" /> Back to shift</Button>
         <AlertDialog>
@@ -901,7 +963,7 @@ function PatientDetail({ patient, onBack, refresh, onDelete }) {
           <UploadPanel onUploadFiles={uploadFiles} onAddNote={addNote} busy={busy} />
           <div>
             <h3 className="mb-2 text-sm font-semibold text-muted-foreground">Uploaded documents ({patient.documents?.length || 0})</h3>
-            <DocumentList documents={patient.documents} onDelete={deleteDoc} />
+            <DocumentList documents={patient.documents} onDelete={deleteDoc} onOpen={openDoc} />
           </div>
         </div>
 

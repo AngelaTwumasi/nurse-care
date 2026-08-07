@@ -50,7 +50,12 @@ async function generateNursingCare(patient) {
   const parts = []
 
   const intro = `You are an experienced clinical nurse educator supporting a NEW GRADUATE nurse.
-Analyse ALL of the attached patient documents (care plan, medication chart, vital signs, allied health notes and other documents) for the following patient and produce a practical, shift-ready nursing care guide.
+Carefully READ and INTERPRET EVERY attached patient document. Documents may include: the care plan,
+medication chart, vital-sign observations, DOCTOR / medical-officer notes and orders, PHYSIOTHERAPY notes,
+DIETITIAN / NUTRITIONIST notes, other allied-health notes, and any other documents. Each document is labelled
+with its category. Extract the relevant information from EACH document (including doctor orders, physio mobility
+plans and nutrition/diet requirements) and INTEGRATE it into ONE cohesive nursing care plan and handover.
+Produce a practical, shift-ready nursing care guide.
 
 PATIENT CONTEXT:
 - Name: ${patient.name || 'Unknown'}

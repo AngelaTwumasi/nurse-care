@@ -26,7 +26,7 @@ import {
   ClipboardCheck, Loader2, BookOpen, User, BedDouble, AlertTriangle, Lightbulb,
   CheckCircle2, FileUp, StickyNote, X, Download, Copy, Clock, TrendingUp,
   TrendingDown, Minus, Gauge, Siren, Volume2, Square, LayoutGrid,
-  Dumbbell, Apple, UserRound, CalendarClock,
+  Dumbbell, Apple, UserRound, CalendarClock, GripVertical, Users,
 } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -243,17 +243,26 @@ function AddPatientDialog({ onAdd, disabled, trigger, reload }) {
 }
 
 /* ------------------------ Patient Card ------------------------ */
-function PatientCard({ patient, index, onOpen, onPopulate, generating }) {
+function PatientCard({ patient, index, onOpen, onPopulate, generating, onDragStart, onDragOver, onDrop, dragging }) {
   const docCount = patient.documents?.length || 0
   const hasAI = !!patient.aiOutput
+  const ew = patient.aiOutput?.earlyWarning
+  const riskBorder = ew
+    ? (ew.riskLevel === 'high' ? 'border-t-red-500' : ew.riskLevel === 'medium' ? 'border-t-amber-500' : 'border-t-emerald-500')
+    : 'border-t-primary/70'
   return (
     <Card
+      draggable
+      onDragStart={() => onDragStart(index)}
+      onDragOver={(e) => { e.preventDefault(); onDragOver(index) }}
+      onDrop={() => onDrop(index)}
       onClick={() => onOpen(patient.id)}
-      className="cursor-pointer transition-all hover:shadow-lg hover:-translate-y-0.5 border-t-4 border-t-primary/70"
+      className={`cursor-pointer transition-all hover:shadow-lg hover:-translate-y-0.5 border-t-4 ${riskBorder} ${dragging ? 'opacity-50 ring-2 ring-primary' : ''}`}
     >
       <CardHeader className="pb-2">
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-2">
+            <GripVertical className="h-4 w-4 shrink-0 cursor-grab text-muted-foreground/50" onClick={(e) => e.stopPropagation()} />
             <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary text-primary-foreground text-sm font-semibold">
               {index + 1}
             </div>
@@ -264,7 +273,11 @@ function PatientCard({ patient, index, onOpen, onPopulate, generating }) {
               </p>
             </div>
           </div>
-          {hasAI
+          {ew ? (
+            <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${riskBadgeCls(ew.riskLevel)}`}>
+              <TrendIcon trend={ew.trend} className="h-3 w-3" /> {ew.riskLevel} risk
+            </span>
+          ) : hasAI
             ? <Badge className="gap-1 bg-emerald-100 text-emerald-700 hover:bg-emerald-100"><CheckCircle2 className="h-3 w-3" /> Ready</Badge>
             : <Badge variant="secondary">New</Badge>}
         </div>
@@ -273,6 +286,9 @@ function PatientCard({ patient, index, onOpen, onPopulate, generating }) {
         <p className="text-sm text-muted-foreground line-clamp-2 min-h-[2.5rem]">
           {patient.diagnosis || 'No diagnosis recorded yet.'}
         </p>
+        {ew && (ew.priorities || patient.aiOutput?.priorities?.length) ? (
+          <p className="mt-1 truncate text-xs text-primary">Top: {patient.aiOutput.priorities?.[0]?.priority}</p>
+        ) : null}
         <Separator className="my-3" />
         <div className="flex items-center justify-between gap-2">
           <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><FileText className="h-3.5 w-3.5" /> {docCount} doc{docCount !== 1 ? 's' : ''}</span>
@@ -1060,6 +1076,57 @@ function riskBadgeCls(level) {
     : 'bg-muted text-muted-foreground'
 }
 
+function downloadHandoverPack(patients) {
+  const withAI = patients.filter((p) => p.aiOutput)
+  if (!withAI.length) { toast.error('No populated patients yet — tap Populate first'); return }
+  const section = (p, idx) => {
+    const ai = p.aiOutput || {}
+    const s = ai.isbar || {}
+    const ew = ai.earlyWarning
+    const ewHtml = ew ? `<span class="ew ew-${esc(ew.riskLevel)}">EWS ${esc(ew.score)} · ${esc(ew.riskLevel)} · ${esc(ew.trend)}</span>` : ''
+    const pri = (ai.priorities || []).slice(0, 4).map((x) => `<li>${esc(x.priority)}</li>`).join('')
+    return `<div class="pt">
+      <div class="ph"><span class="num">${idx + 1}</span><b>${esc(p.name)}</b> <span class="bed">${esc(p.bed || '')}${p.age ? ' · ' + esc(p.age) + 'y' : ''}</span> ${ewHtml}</div>
+      <table>
+        <tr><td class="lbl">I</td><td>${esc(s.identify)}</td></tr>
+        <tr><td class="lbl">S</td><td>${esc(s.situation)}</td></tr>
+        <tr><td class="lbl">B</td><td>${esc(s.background)}</td></tr>
+        <tr><td class="lbl">A</td><td>${esc(s.assessment)}</td></tr>
+        <tr><td class="lbl">R</td><td>${esc(s.recommendation)}</td></tr>
+      </table>
+      ${pri ? `<div class="pri"><b>Top priorities:</b><ul>${pri}</ul></div>` : ''}
+    </div>`
+  }
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Shift Handover Pack</title>
+  <style>
+    *{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;box-sizing:border-box}
+    body{margin:28px;color:#0f172a}
+    h1{font-size:22px;margin:0 0 2px}
+    .sub{color:#475569;font-size:13px;margin-bottom:14px}
+    .pt{border:1px solid #e2e8f0;border-radius:10px;padding:12px 14px;margin-bottom:12px;page-break-inside:avoid}
+    .ph{display:flex;align-items:center;gap:8px;font-size:15px;margin-bottom:8px}
+    .num{display:inline-flex;width:22px;height:22px;align-items:center;justify-content:center;border-radius:50%;background:#0d9488;color:#fff;font-size:12px;font-weight:700}
+    .bed{color:#64748b;font-size:12px;font-weight:400}
+    table{width:100%;border-collapse:collapse;font-size:12.5px}
+    td{padding:4px 8px;vertical-align:top;border-bottom:1px solid #eef2f6}
+    td.lbl{width:26px;font-weight:700;color:#0f766e}
+    .pri{margin-top:8px;font-size:12.5px}
+    .pri ul{margin:4px 0;padding-left:18px}
+    .ew{margin-left:auto;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700}
+    .ew-low{background:#d1fae5;color:#065f46}.ew-medium{background:#fef3c7;color:#92400e}.ew-high{background:#fee2e2;color:#991b1b}
+    .foot{margin-top:16px;font-size:11px;color:#64748b}
+  </style></head><body>
+  <h1>Shift Handover Pack</h1>
+  <div class="sub">${withAI.length} patient${withAI.length > 1 ? 's' : ''} · generated ${new Date().toLocaleString()}</div>
+  ${withAI.map(section).join('')}
+  <div class="foot">NurseCare — decision support only. Verify medications, doses and escalation with the treating team/RN.</div>
+  </body></html>`
+  const w = window.open('', '_blank')
+  if (!w) { toast.error('Please allow pop-ups to download the pack'); return }
+  w.document.open(); w.document.write(html); w.document.close()
+  setTimeout(() => { w.focus(); w.print() }, 500)
+}
+
 function ShiftBoard({ open, onOpenChange, patients, onOpenPatient }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1121,11 +1188,28 @@ function App() {
   const [tutorialOpen, setTutorialOpen] = useState(false)
   const [boardOpen, setBoardOpen] = useState(false)
   const [generatingId, setGeneratingId] = useState(null)
+  const [bulk, setBulk] = useState(null) // {done,total} while populating all
+  const dragIndex = useRef(null)
+  const [dragOver, setDragOver] = useState(null)
+
+  const saveOrder = (list) => {
+    try { localStorage.setItem('nursecare_order', JSON.stringify(list.map((p) => p.id))) } catch {}
+  }
+  const applyOrder = (list) => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('nursecare_order') || '[]')
+      if (!saved.length) return list
+      const map = Object.fromEntries(list.map((p) => [p.id, p]))
+      const ordered = saved.map((id) => map[id]).filter(Boolean)
+      const rest = list.filter((p) => !saved.includes(p.id))
+      return [...ordered, ...rest]
+    } catch { return list }
+  }
 
   const load = useCallback(async () => {
     try {
       const data = await api('/patients')
-      setPatients(data)
+      setPatients(applyOrder(data))
     } catch (e) { toast.error(e.message) } finally { setLoading(false) }
   }, [])
 
@@ -1152,6 +1236,39 @@ function App() {
       await load()
       toast.success('Nursing cares populated')
     } catch (e) { toast.error(e.message) } finally { setGeneratingId(null) }
+  }
+
+  const populateAll = async () => {
+    if (!patients.length) return
+    setBulk({ done: 0, total: patients.length })
+    let ok = 0
+    for (let i = 0; i < patients.length; i++) {
+      try {
+        await api(`/patients/${patients[i].id}/generate`, { method: 'POST' })
+        ok++
+      } catch (e) { /* continue */ }
+      setBulk({ done: i + 1, total: patients.length })
+    }
+    await load()
+    setBulk(null)
+    toast.success(`Populated ${ok} of ${patients.length} patients`)
+  }
+
+  // drag reorder
+  const handleDragStart = (i) => { dragIndex.current = i }
+  const handleDragOver = (i) => { if (i !== dragOver) setDragOver(i) }
+  const handleDrop = (i) => {
+    const from = dragIndex.current
+    dragIndex.current = null
+    setDragOver(null)
+    if (from == null || from === i) return
+    setPatients((prev) => {
+      const next = [...prev]
+      const [moved] = next.splice(from, 1)
+      next.splice(i, 0, moved)
+      saveOrder(next)
+      return next
+    })
   }
 
   const deletePatient = async (id) => {
@@ -1220,7 +1337,15 @@ function App() {
                 <h2 className="text-2xl font-bold tracking-tight">Your shift</h2>
                 <p className="text-sm text-muted-foreground">{patients.length} of {MAX_PATIENTS} patients · tap a patient to manage documents & generate cares</p>
               </div>
-              <AddPatientDialog onAdd={addPatient} reload={load} disabled={patients.length >= MAX_PATIENTS} />
+              <div className="flex flex-wrap items-center gap-2">
+                <Button variant="outline" onClick={() => downloadHandoverPack(patients)} className="gap-2" disabled={!patients.some((p) => p.aiOutput)}>
+                  <Download className="h-4 w-4" /> Handover pack
+                </Button>
+                <Button variant="outline" onClick={populateAll} disabled={!!bulk} className="gap-2">
+                  {bulk ? <><Loader2 className="h-4 w-4 animate-spin" /> Populating {bulk.done}/{bulk.total}…</> : <><Sparkles className="h-4 w-4" /> Populate all</>}
+                </Button>
+                <AddPatientDialog onAdd={addPatient} reload={load} disabled={patients.length >= MAX_PATIENTS} />
+              </div>
             </div>
 
             {patients.length === 0 ? (
@@ -1240,7 +1365,18 @@ function App() {
             ) : (
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 {patients.map((p, i) => (
-                  <PatientCard key={p.id} patient={p} index={i} onOpen={setSelectedId} onPopulate={populatePatient} generating={generatingId === p.id} />
+                  <PatientCard
+                    key={p.id}
+                    patient={p}
+                    index={i}
+                    onOpen={setSelectedId}
+                    onPopulate={populatePatient}
+                    generating={generatingId === p.id || (!!bulk && !p.aiOutput)}
+                    onDragStart={handleDragStart}
+                    onDragOver={handleDragOver}
+                    onDrop={handleDrop}
+                    dragging={dragOver === i}
+                  />
                 ))}
                 {Array.from({ length: MAX_PATIENTS - patients.length }).map((_, i) => (
                   <AddPatientDialog

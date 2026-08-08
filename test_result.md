@@ -256,6 +256,36 @@ frontend:
         -agent: "testing"
         -comment: "✅ SAMPLE SCENARIO PRESETS FULLY WORKING. Comprehensive backend testing completed. (1) SEPSIS SAMPLE: POST /api/sample with {\"type\":\"sepsis\"} returns 200, patient name 'DEMO · Mrs. Rita Kaur', diagnosis 'Urosepsis; hypotension; on IV antibiotics and fluids', earlyWarning.riskLevel='high', earlyWarning.score='8', earlyWarning.trend='worsening', isSample=true, valid UUID id (36 chars), documents array with 1 document, ewHistory array with 3 entries. (2) POST-OP SAMPLE: POST /api/sample with {\"type\":\"postop\"} returns 200, patient name 'DEMO · Mr. Tom Fischer', diagnosis 'Day 1 post laparoscopic appendicectomy; stable, pain management', earlyWarning.riskLevel='low', earlyWarning.score='0', earlyWarning.trend='stable', isSample=true, valid UUID id, documents array with 1 document, ewHistory array with 3 entries. (3) CHF SAMPLE (DEFAULT): POST /api/sample with no body returns 200, patient name 'DEMO · Mr. Alan Reid', diagnosis 'Congestive heart failure exacerbation; Type 2 diabetes; monitoring for fluid overload', earlyWarning.riskLevel='high', earlyWarning.score='6', earlyWarning.trend='worsening', isSample=true, valid UUID id, documents array with 1 document, ewHistory array with 3 entries. (4) ALL AIOUTPUT KEYS PRESENT: All 12 required keys verified for all samples: patientSummary, priorities, interventions, isbar (with all 5 sections: identify/situation/background/assessment/recommendation), medications, medicationTimes, vitalsTimeline, careSchedule, earlyWarning (with all 5 fields: score/riskLevel/trend/rationale/escalation), redFlags, newGradTips, safetyNotice. (5) MAX-4 ENFORCEMENT: Created samples until patient count reached 4, then attempted to create 5th patient. Correctly returned HTTP 400 with error message 'Patient load is full (max 4 patients). Discharge one first.' (6) CLEANUP: All created sample patients deleted successfully via DELETE /api/patients/:id. Patient 'm' was not present during testing. Backend sample scenario presets feature is PRODUCTION-READY."
 
+  - task: "Multi-patient ingest (POST /api/ingest)"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW POST /api/ingest endpoint accepts {documents:[...]} and uses AI to detect 1-4 distinct patients from a single uploaded handover/allocation sheet. Creates a patient record for each detected patient (up to remaining free slots, max 4 total), attaches the same document(s) to each, and returns {patients:[...created...], detectedCount, created, truncated}. Each created multi-patient record has a 'focusHint' field set (so its later care-plan generation focuses on just that patient). Single-patient documents have focusHint=null. Empty documents array returns 400 error."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ MULTI-PATIENT INGEST FULLY WORKING - ALL TESTS PASSED (6/6). Comprehensive backend testing completed. STEP 2 - MULTI-PATIENT INGEST (4 patients): POST /api/ingest with document describing 4 patients (John Smith/pneumonia, Mary Jones/knee replacement, Ahmed Khan/COPD, Rosa Diaz/UTI) returned 200. detectedCount=4 ✅, created=4 ✅, truncated=false ✅. All 4 patients returned with correct names (Smith, Jones, Khan, Diaz), bed numbers (1-4), diagnoses extracted correctly. ALL 4 patients have non-empty focusHint field ✅ (e.g. 'John Smith (bed Bed 1) — community acquired pneumonia'). ALL 4 patients have documents attached (count: 1) ✅. ALL 4 patients have valid UUID ids (36 chars) ✅. STEP 3 - AI GENERATION WITH FOCUSHINT: Generated AI care plans for 2 patients (John Smith and Mary Jones) to verify focusHint works. John Smith (pneumonia): AI generation completed in 37.9s (REAL Gemini 2.5 Pro). Patient summary mentions 'community acquired pneumonia' ✅, header diagnosis='community acquired pneumonia' ✅. AI output is specific to pneumonia patient, NOT knee replacement ✅. Mary Jones (knee replacement): AI generation completed in 40.1s. Patient summary mentions 'total knee replacement' ✅, header diagnosis='day 2 post total knee replacement' ✅. AI output is specific to knee replacement patient, NOT pneumonia ✅. This PROVES focusHint is working correctly - AI generates patient-specific care plans even when multiple patients are in the same document! STEP 5 - SINGLE-PATIENT INGEST: POST /api/ingest with document describing ONE patient (Tim Green, pancreatitis) returned 200. detectedCount=1 ✅, created=1 ✅. Patient has focusHint=null (correct for single patient) ✅. STEP 6 - EMPTY DOCUMENTS VALIDATION: POST /api/ingest with empty documents array returned 400 error with message 'No documents provided' ✅. All 4 test patients cleaned up successfully. Multi-patient ingest feature is PRODUCTION-READY."
+
+  - task: "Abbreviation reader in AI output + samples"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "AI generate prompt EXTENDED to include 'abbreviations' field in aiOutput schema. Returns array of {abbr, meaning} objects where abbr is the medical abbreviation/acronym EXACTLY as written in documents, and meaning is the full term plus a short plain-English explanation a new grad can understand. Sample presets (sepsis/postop/chf) also include hardcoded abbreviations arrays. TEST: (1) POST /api/sample for each type (sepsis/postop/chf) and confirm aiOutput.abbreviations is a non-empty array where each item has non-empty abbr and meaning. (2) Create patient with text doc containing abbreviations (e.g. COPD, IV abx, QID, SpO2, IDC, DVT), POST /generate (REAL Gemini), confirm aiOutput.abbreviations is non-empty array explaining several abbreviations. Also confirm all previously-tested schema keys still present (handoverHeader, criticalActions, drsabcd, dietMobility, assessments, linesDevices, edd, recommendations, outstandingTasks, interventions[].howToMonitor)."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ ABBREVIATION READER FULLY WORKING - ALL TESTS PASSED (4/4). Comprehensive backend testing completed. STEP 7 - SAMPLE PRESETS (3/3 PASS): (1) SEPSIS sample: abbreviations array has 4 items ✅. Examples: UTI='Urinary Tract Infection — infection in the urinary...', MET='Medical Emergency Team — rapid response team...', IDC='Indwelling Catheter — a tube in the bladder...', BGL='Blood Glucose Level — bedside blood sugar...'. All have non-empty abbr and meaning ✅. (2) POSTOP sample: abbreviations array has 4 items ✅. Examples: TDS='Ter Die Sumendum — three times a day...', PRN='Pro Re Nata — given as needed...', IV='Intravenous — into the vein...', DVT='Deep Vein Thrombosis — a blood clot...'. All have non-empty abbr and meaning ✅. (3) CHF sample: abbreviations array has 4 items ✅. Examples: CHF='Congestive Heart Failure — the heart can't pump...', SpO2='Peripheral oxygen saturation — % of oxygen...', MET='Medical Emergency Team...', BGL='Blood Glucose Level...'. All have non-empty abbr and meaning ✅. STEP 8 - REAL AI GENERATION (1/1 PASS): Created patient 'Abbr Test Patient' (65yo, COPD exacerbation) with abbreviations-rich document containing: COPD, IV abx, QID, HR, BP, RR, SpO2, RA, IDC, DVT, SC, BGL, BD, MET. AI generation completed in 40.7s (REAL Gemini 2.5 Pro). abbreviations array has 14 items ✅. Found ALL 8 expected abbreviations: COPD, IV, QID, SpO2, IDC, DVT, BGL, MET ✅. Sample abbreviation meanings: 'COPD: Chronic Obstructive Pulmonary Disease - A long-term lung disease...', 'IV abx: Intravenous antibiotics - Antibiotics given directly into a vein...', 'QID: Quater in die - Latin for four times a day...', 'SpO2: Peripheral Oxygen Saturation - A measure of the amount of oxygen in the blood...', 'IDC: Indwelling Catheter - A tube inserted into the bladder...', 'DVT: Deep Vein Thrombosis - A blood clot in a deep vein...', 'BGL: Blood Glucose Level - The amount of sugar in the blood...', 'MET: Medical Emergency Team - A specialized team that responds to deteriorating patients...'. ALL 22 required schema keys present ✅ (including all previous keys: patientSummary, priorities, interventions, isbar, medications, medicationTimes, vitalsTimeline, careSchedule, earlyWarning, redFlags, newGradTips, safetyNotice, handoverHeader, criticalActions, drsabcd, dietMobility, assessments, linesDevices, edd, recommendations, outstandingTasks, abbreviations). interventions have 'howToMonitor' field ✅. Test patient cleaned up successfully. Abbreviation reader feature is PRODUCTION-READY."
+
   - task: "Shift dashboard + patient workspace + tutorial"
     implemented: true
     working: true
@@ -303,13 +333,13 @@ frontend:
 
 metadata:
   created_by: "main_agent"
-  version: "1.9"
-  test_sequence: 12
+  version: "2.0"
+  test_sequence: 13
   run_ui: false
 
 test_plan:
   current_focus:
-    - "Recovery endpoint and handoverNoteAt timestamp tested and verified"
+    - "Image documents readable by AI (generate with image)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -1288,3 +1318,105 @@ agent_communication:
       ✅ Patients 'm' and 'paul' preserved as instructed
       
       NO CRITICAL ISSUES FOUND. Backend expanded AI schema is PRODUCTION-READY.
+
+    -agent: "testing"
+    -message: |
+      ✅ NEW FEATURES TESTING COMPLETE - ALL TESTS PASSED (8/8)
+      
+      Comprehensive backend testing of TWO new features completed successfully.
+      
+      FEATURE 1: MULTI-PATIENT INGEST (POST /api/ingest) - MOST IMPORTANT ✅
+      
+      Test Results (6/6 PASS):
+      
+      STEP 2 - MULTI-PATIENT INGEST (4 patients):
+      ✅ POST /api/ingest with document describing 4 patients returned 200
+      ✅ detectedCount=4, created=4, truncated=false
+      ✅ All 4 patients returned with correct details:
+         - Patient 1: John Smith, Bed 1, community acquired pneumonia
+         - Patient 2: Mary Jones, Bed 2, day 2 post total knee replacement
+         - Patient 3: Ahmed Khan, Bed 3, exacerbation of COPD
+         - Patient 4: Rosa Diaz, Bed 4, UTI with delirium
+      ✅ ALL 4 patients have non-empty focusHint field (e.g. 'John Smith (bed Bed 1) — community acquired pneumonia')
+      ✅ ALL 4 patients have documents attached (count: 1 each)
+      ✅ ALL 4 patients have valid UUID ids (36 chars, not MongoDB ObjectId)
+      
+      STEP 3 - AI GENERATION WITH FOCUSHINT (CRITICAL TEST):
+      ✅ Generated AI care plans for 2 patients to verify focusHint works correctly
+      ✅ John Smith (pneumonia): AI generation completed in 37.9s (REAL Gemini 2.5 Pro)
+         - Patient summary mentions 'community acquired pneumonia' ✅
+         - Header diagnosis='community acquired pneumonia' ✅
+         - AI output is specific to pneumonia patient, NOT knee replacement ✅
+      ✅ Mary Jones (knee replacement): AI generation completed in 40.1s
+         - Patient summary mentions 'total knee replacement' ✅
+         - Header diagnosis='day 2 post total knee replacement' ✅
+         - AI output is specific to knee replacement patient, NOT pneumonia ✅
+      ✅ CRITICAL: This PROVES focusHint is working correctly!
+         AI generates patient-specific care plans even when multiple patients are in the same document.
+         The focusHint field successfully directs the AI to focus on just one patient from a multi-patient sheet.
+      
+      STEP 5 - SINGLE-PATIENT INGEST:
+      ✅ POST /api/ingest with document describing ONE patient (Tim Green, pancreatitis) returned 200
+      ✅ detectedCount=1, created=1
+      ✅ Patient has focusHint=null (correct for single patient - no focus hint needed)
+      
+      STEP 6 - EMPTY DOCUMENTS VALIDATION:
+      ✅ POST /api/ingest with empty documents array returned 400 error
+      ✅ Error message: 'No documents provided' (correct validation)
+      
+      Cleanup: All 4 test patients deleted successfully. No protected patients ('m'/'paul') were present.
+      
+      FEATURE 2: ABBREVIATION READER IN AI OUTPUT + SAMPLES ✅
+      
+      Test Results (4/4 PASS):
+      
+      STEP 7 - SAMPLE PRESETS (3/3 PASS):
+      ✅ SEPSIS sample: abbreviations array has 4 items
+         - UTI='Urinary Tract Infection — infection in the urinary...'
+         - MET='Medical Emergency Team — rapid response team...'
+         - IDC='Indwelling Catheter — a tube in the bladder...'
+         - BGL='Blood Glucose Level — bedside blood sugar...'
+         - All have non-empty abbr and meaning ✅
+      
+      ✅ POSTOP sample: abbreviations array has 4 items
+         - TDS='Ter Die Sumendum — three times a day...'
+         - PRN='Pro Re Nata — given as needed...'
+         - IV='Intravenous — into the vein...'
+         - DVT='Deep Vein Thrombosis — a blood clot...'
+         - All have non-empty abbr and meaning ✅
+      
+      ✅ CHF sample: abbreviations array has 4 items
+         - CHF='Congestive Heart Failure — the heart can't pump...'
+         - SpO2='Peripheral oxygen saturation — % of oxygen...'
+         - MET='Medical Emergency Team...'
+         - BGL='Blood Glucose Level...'
+         - All have non-empty abbr and meaning ✅
+      
+      STEP 8 - REAL AI GENERATION (1/1 PASS):
+      ✅ Created patient 'Abbr Test Patient' (65yo, COPD exacerbation)
+      ✅ Added abbreviations-rich document containing: COPD, IV abx, QID, HR, BP, RR, SpO2, RA, IDC, DVT, SC, BGL, BD, MET
+      ✅ AI generation completed in 40.7s (REAL Gemini 2.5 Pro)
+      ✅ abbreviations array has 14 items (non-empty) ✅
+      ✅ Found ALL 8 expected abbreviations: COPD, IV, QID, SpO2, IDC, DVT, BGL, MET ✅
+      ✅ Sample abbreviation meanings:
+         - 'COPD: Chronic Obstructive Pulmonary Disease - A long-term lung disease...'
+         - 'IV abx: Intravenous antibiotics - Antibiotics given directly into a vein...'
+         - 'QID: Quater in die - Latin for four times a day...'
+         - 'SpO2: Peripheral Oxygen Saturation - A measure of the amount of oxygen in the blood...'
+         - 'IDC: Indwelling Catheter - A tube inserted into the bladder...'
+         - 'DVT: Deep Vein Thrombosis - A blood clot in a deep vein...'
+         - 'BGL: Blood Glucose Level - The amount of sugar in the blood...'
+         - 'MET: Medical Emergency Team - A specialized team that responds to deteriorating patients...'
+      
+      SCHEMA INTEGRITY VERIFICATION:
+      ✅ ALL 22 required schema keys present (including all previous keys):
+         - Base keys: patientSummary, priorities, interventions, isbar, medications
+         - Round 2 keys: medicationTimes, vitalsTimeline, earlyWarning
+         - Round 3 keys: careSchedule, medications[].times
+         - Expanded keys: handoverHeader, criticalActions, drsabcd, dietMobility, assessments, linesDevices, edd, recommendations, outstandingTasks
+         - NEW key: abbreviations ✅
+      ✅ interventions have 'howToMonitor' field ✅
+      
+      Cleanup: Test patient deleted successfully.
+      
+      NO CRITICAL ISSUES FOUND. Both new features are PRODUCTION-READY.

@@ -26,7 +26,7 @@ import {
   ClipboardCheck, Loader2, BookOpen, User, BedDouble, AlertTriangle, Lightbulb,
   CheckCircle2, FileUp, StickyNote, X, Download, Copy, Clock, TrendingUp,
   TrendingDown, Minus, Gauge, Siren, Volume2, Square, LayoutGrid,
-  Dumbbell, Apple, UserRound, CalendarClock, GripVertical, Users, ArrowDownWideNarrow, Printer, Search, Camera,
+  Dumbbell, Apple, UserRound, CalendarClock, GripVertical, Users, ArrowDownWideNarrow, Printer, Search, Camera, WifiOff,
 } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -68,6 +68,41 @@ function fileToDataUrl(file) {
     reader.onerror = reject
     reader.readAsDataURL(file)
   })
+}
+
+// Downscale large images (e.g. full-res phone photos) so the AI can reliably read them and storage stays small
+function resizeImageDataUrl(dataUrl, maxDim = 1600, quality = 0.85) {
+  return new Promise((resolve) => {
+    try {
+      const img = document.createElement('img')
+      img.onload = () => {
+        let { width, height } = img
+        if (!width || !height) { resolve(dataUrl); return }
+        if (Math.max(width, height) > maxDim) {
+          const scale = maxDim / Math.max(width, height)
+          width = Math.round(width * scale)
+          height = Math.round(height * scale)
+        }
+        const canvas = document.createElement('canvas')
+        canvas.width = width
+        canvas.height = height
+        canvas.getContext('2d').drawImage(img, 0, 0, width, height)
+        resolve(canvas.toDataURL('image/jpeg', quality))
+      }
+      img.onerror = () => resolve(dataUrl)
+      img.src = dataUrl
+    } catch { resolve(dataUrl) }
+  })
+}
+
+// Convert a File to an upload-ready document (images are downscaled & re-encoded as JPEG)
+async function fileToDoc(file, category) {
+  const dataUrl = await fileToDataUrl(file)
+  if (file.type && file.type.startsWith('image/')) {
+    const resized = await resizeImageDataUrl(dataUrl)
+    return { name: file.name, category, kind: 'file', mimeType: 'image/jpeg', dataUrl: resized }
+  }
+  return { name: file.name, category, kind: 'file', mimeType: file.type, dataUrl }
 }
 
 // Upload a single document with real upload-progress reporting (XHR — fetch has no upload progress)
@@ -221,8 +256,8 @@ function PatientForm({ onAdd, reload, onSuccess, submitLabel = 'Add patient' }) 
         let uploaded = 0
         for (const f of files) {
           if (f.size > 25 * 1024 * 1024) { toast.error(`${f.name} is too large (max 25MB)`); continue }
-          const dataUrl = await fileToDataUrl(f)
-          await api(`/patients/${p.id}/documents`, { method: 'POST', body: JSON.stringify({ documents: [{ name: f.name, category, kind: 'file', mimeType: f.type, dataUrl }] }) })
+          const doc = await fileToDoc(f, category)
+          await api(`/patients/${p.id}/documents`, { method: 'POST', body: JSON.stringify({ documents: [doc] }) })
           uploaded++
         }
         if (uploaded) {
@@ -310,10 +345,18 @@ function CameraCapture({ onCapture, category }) {
   const capture = () => {
     const v = videoRef.current
     if (!v || !v.videoWidth) { toast.error('Camera not ready yet'); return }
+    let width = v.videoWidth
+    let height = v.videoHeight
+    const maxDim = 1600
+    if (Math.max(width, height) > maxDim) {
+      const scale = maxDim / Math.max(width, height)
+      width = Math.round(width * scale)
+      height = Math.round(height * scale)
+    }
     const canvas = document.createElement('canvas')
-    canvas.width = v.videoWidth
-    canvas.height = v.videoHeight
-    canvas.getContext('2d').drawImage(v, 0, 0, canvas.width, canvas.height)
+    canvas.width = width
+    canvas.height = height
+    canvas.getContext('2d').drawImage(v, 0, 0, width, height)
     const dataUrl = canvas.toDataURL('image/jpeg', 0.85)
     const stamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     onCapture({ name: `Photo ${stamp}.jpg`, category, kind: 'file', mimeType: 'image/jpeg', dataUrl })
@@ -354,8 +397,7 @@ function LandingUpload({ onSubmit }) {
     const next = []
     for (const f of files) {
       if (f.size > 25 * 1024 * 1024) { toast.error(`${f.name} is too large (max 25MB)`); continue }
-      const dataUrl = await fileToDataUrl(f)
-      next.push({ name: f.name, category, kind: 'file', mimeType: f.type, dataUrl })
+      next.push(await fileToDoc(f, category))
     }
     if (next.length) setDocs((prev) => [...prev, ...next])
   }
@@ -427,7 +469,7 @@ function WelcomeLanding({ onSubmit, onSample, onContinue, count }) {
         {count > 0 && (
           <button onClick={onContinue} className="mb-3 inline-flex items-center gap-1 text-sm text-primary hover:underline"><ArrowLeft className="h-4 w-4" /> Back to my shift ({count})</button>
         )}
-        <p className="mb-4 text-sm text-muted-foreground">Upload a patient’s documents — snap a photo or choose a PDF/image. NurseCare creates the patient and takes you straight to <b>Populate</b>.</p>
+        <p className="mb-4 text-sm text-muted-foreground">Upload your shift sheet or a patient’s documents — snap a photo or choose a PDF/image. NurseCare reads it, creates <b>every patient it finds (up to 4)</b> and populates all their care plans automatically.</p>
         <LandingUpload onSubmit={onSubmit} />
         <div className="relative my-4"><Separator /><span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-card px-2 text-xs text-muted-foreground">or</span></div>
         <Button variant="outline" className="w-full gap-2" onClick={() => onSample()}><Sparkles className="h-4 w-4 text-primary" /> Try a sample patient (ready-made care plan)</Button>
@@ -1423,6 +1465,22 @@ function AIResults({ ai, patient, generatedAt, careDone, onToggleCare }) {
         </Card>
       )}
 
+      {(ai.abbreviations || []).length > 0 && (
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><BookOpen className="h-4 w-4 text-primary" /> Abbreviation reader</CardTitle><CardDescription>Plain-English meanings of the abbreviations found in this patient’s documents.</CardDescription></CardHeader>
+          <CardContent>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {ai.abbreviations.map((a, i) => (
+                <div key={i} className="flex gap-2 rounded-md border bg-card p-2.5 text-sm">
+                  <span className="shrink-0 rounded bg-primary/10 px-2 py-0.5 text-xs font-bold text-primary">{a.abbr}</span>
+                  <span className="text-muted-foreground">{a.meaning}</span>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {ai.safetyNotice && (
         <div className="flex items-start gap-2 rounded-lg bg-muted p-3 text-xs text-muted-foreground">
           <ShieldAlert className="h-4 w-4 shrink-0" /> {ai.safetyNotice}
@@ -1561,11 +1619,11 @@ function PatientDetail({ patient, onBack, refresh, onDelete }) {
       const valid = files.filter((f) => { if (f.size > 25 * 1024 * 1024) { toast.error(`${f.name} is too large (max 25MB)`); return false } return true })
       for (let i = 0; i < valid.length; i++) {
         const f = valid[i]
-        const dataUrl = await fileToDataUrl(f)
+        const doc = await fileToDoc(f, category)
         setUploadProgress({ name: f.name, pct: 0, index: i + 1, total: valid.length })
         await uploadDocument(
           patient.id,
-          { name: f.name, category, kind: 'file', mimeType: f.type, dataUrl },
+          doc,
           (pct) => setUploadProgress({ name: f.name, pct, index: i + 1, total: valid.length })
         )
         uploaded++
@@ -1837,6 +1895,39 @@ function App() {
   const [improvingId, setImprovingId] = useState(null)
   const [escalated, setEscalated] = useState([]) // [{id,name}] patients that just crossed into HIGH risk
   const [showHome, setShowHome] = useState(false) // document-upload landing ("first section")
+  const [online, setOnline] = useState(true)
+  const [installPrompt, setInstallPrompt] = useState(null)
+  const [isStandalone, setIsStandalone] = useState(false)
+
+  useEffect(() => {
+    const set = () => setOnline(navigator.onLine)
+    set()
+    window.addEventListener('online', set)
+    window.addEventListener('offline', set)
+    const onBip = (e) => { e.preventDefault(); setInstallPrompt(e) }
+    const onInstalled = () => { setInstallPrompt(null); toast.success('NurseCare added to your home screen') }
+    window.addEventListener('beforeinstallprompt', onBip)
+    window.addEventListener('appinstalled', onInstalled)
+    setIsStandalone(window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true)
+    return () => {
+      window.removeEventListener('online', set)
+      window.removeEventListener('offline', set)
+      window.removeEventListener('beforeinstallprompt', onBip)
+      window.removeEventListener('appinstalled', onInstalled)
+    }
+  }, [])
+
+  const installApp = async () => {
+    if (installPrompt) {
+      installPrompt.prompt()
+      try { await installPrompt.userChoice } catch {}
+      setInstallPrompt(null)
+      return
+    }
+    const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent)
+    if (isIOS) toast('On iPhone/iPad: tap the Share button, then “Add to Home Screen”.', { duration: 7000 })
+    else toast('In your browser menu, choose “Install app” / “Add to Home screen”.', { duration: 7000 })
+  }
   const prevRiskRef = useRef({})
   const firstLoadRef = useRef(true)
   const [bulk, setBulk] = useState(null) // {done,total} while populating all
@@ -1934,19 +2025,32 @@ function App() {
   }
 
   const createFromDocs = async (docs) => {
+    if (!navigator.onLine) { toast.error('You’re offline. Reconnect to upload documents and generate cares.'); return }
     try {
-      const name = `Patient ${patients.length + 1}`
-      const p = await api('/patients', { method: 'POST', body: JSON.stringify({ name }) })
-      for (const d of docs) {
-        await uploadDocument(p.id, d)
-      }
+      setShowHome(false)
+      setSelectedId(null)
+      const res = await api('/ingest', { method: 'POST', body: JSON.stringify({ documents: docs }) })
+      const created = res.patients || []
+      if (!created.length) { toast.error('No patient could be created from that document'); return }
       await load()
-      toast.success('Documents uploaded — tap Populate to generate the care plan')
-      setSelectedId(p.id)
-    } catch (e) { toast.error(e.message) }
+      if (created.length > 1) toast.success(`${created.length} patients found on the sheet — generating care plans…`)
+      else toast.success('Patient created — generating the care plan…')
+      if (res.truncated) toast(`Only ${created.length} of ${res.detectedCount} patients added (max ${MAX_PATIENTS} per shift).`)
+      // Auto-populate every detected patient
+      setBulk({ done: 0, total: created.length })
+      let ok = 0
+      for (const p of created) {
+        try { await api(`/patients/${p.id}/generate`, { method: 'POST' }); ok++ } catch (e) { /* keep going */ }
+        setBulk({ done: ok, total: created.length })
+        await load()
+      }
+      setBulk(null)
+      toast.success(`Care plan${ok > 1 ? 's' : ''} ready for ${ok} patient${ok > 1 ? 's' : ''}`)
+    } catch (e) { toast.error(e.message); setBulk(null) }
   }
 
   const populatePatient = async (id) => {
+    if (!navigator.onLine) { toast.error('You’re offline. Reconnect to generate cares.'); return }
     const p = patients.find((x) => x.id === id)
     if (p?.aiOutput && !window.confirm(`Regenerate cares for ${p.name}? This replaces the current plan.`)) return
     setGeneratingId(id)
@@ -2063,12 +2167,23 @@ function App() {
                 <LayoutGrid className="h-4 w-4" /> <span className="hidden sm:inline">Shift board</span>
               </Button>
             )}
+            {!isStandalone && (
+              <Button variant="default" size="sm" className="gap-2" onClick={installApp}>
+                <Download className="h-4 w-4" /> <span className="hidden sm:inline">Install</span>
+              </Button>
+            )}
             <Button variant="outline" size="sm" className="gap-2" onClick={() => setTutorialOpen(true)}>
               <BookOpen className="h-4 w-4" /> <span className="hidden sm:inline">Tutorial</span>
             </Button>
           </div>
         </div>
       </header>
+
+      {!online && (
+        <div className="flex items-center justify-center gap-2 bg-amber-500 px-4 py-1.5 text-center text-xs font-medium text-white">
+          <WifiOff className="h-3.5 w-3.5" /> You’re offline — you can still view your loaded patients & care plans. Generating new cares needs a connection.
+        </div>
+      )}
 
       <main className="container py-6">
         {loading ? (
@@ -2120,53 +2235,9 @@ function App() {
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <Button variant={sortMode === 'risk' ? 'default' : 'outline'} onClick={toggleSort} className="gap-2">
-                  <ArrowDownWideNarrow className="h-4 w-4" /> {sortMode === 'risk' ? 'Sorted by risk' : 'Sort by risk'}
+                <Button variant="outline" onClick={() => setShowHome(true)} className="gap-2">
+                  <FileUp className="h-4 w-4" /> Upload documents
                 </Button>
-                <Button
-                  variant={patients.some((p) => p.aiOutput) ? 'default' : 'outline'}
-                  onClick={() => downloadHandoverPack(patients)}
-                  className={`gap-2 ${patients.some((p) => p.aiOutput) ? 'ring-2 ring-primary/40' : ''}`}
-                >
-                  <Download className="h-4 w-4" /> Handover pack
-                </Button>
-                <Button variant="outline" onClick={populateAll} disabled={!!bulk} className="gap-2">
-                  {bulk ? <><Loader2 className="h-4 w-4 animate-spin" /> Populating {bulk.done}/{bulk.total}…</> : <><Sparkles className="h-4 w-4" /> Populate all</>}
-                </Button>
-                {patients.length < MAX_PATIENTS && (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" className="gap-2 text-primary">
-                        <Sparkles className="h-4 w-4" /> Sample
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="w-56">
-                      <DropdownMenuLabel>Add a demo patient</DropdownMenuLabel>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem onClick={() => addSample('sepsis')} className="gap-2">
-                        <Siren className="h-4 w-4 text-red-600" />
-                        <div className="flex flex-col">
-                          <span className="font-medium">Sepsis (deteriorating)</span>
-                          <span className="text-[11px] text-muted-foreground">High risk · urosepsis</span>
-                        </div>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => addSample('postop')} className="gap-2">
-                        <ClipboardCheck className="h-4 w-4 text-emerald-600" />
-                        <div className="flex flex-col">
-                          <span className="font-medium">Post-op (stable)</span>
-                          <span className="text-[11px] text-muted-foreground">Low risk · day 1 appendicectomy</span>
-                        </div>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => addSample('chf')} className="gap-2">
-                        <HeartPulse className="h-4 w-4 text-amber-600" />
-                        <div className="flex flex-col">
-                          <span className="font-medium">Heart failure (CHF)</span>
-                          <span className="text-[11px] text-muted-foreground">Worsening · fluid overload</span>
-                        </div>
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                )}
                 <AddPatientDialog onAdd={addPatient} reload={load} disabled={patients.length >= MAX_PATIENTS} />
               </div>
             </div>
@@ -2212,7 +2283,7 @@ function App() {
                   </div>
                 </div>
                 <CardContent className="pt-5">
-                  <p className="mb-4 text-sm text-muted-foreground">Upload the patient’s documents — care plan, meds, vitals, doctor or allied-health notes. Snap a photo or choose a PDF/image. NurseCare creates the patient and takes you straight to <b>Populate</b>.</p>
+                  <p className="mb-4 text-sm text-muted-foreground">Upload your shift sheet or a patient’s documents — care plan, meds, vitals, doctor or allied-health notes. Snap a photo or choose a PDF/image. NurseCare reads it, creates <b>every patient it finds (up to 4)</b> and populates all their care plans automatically.</p>
                   <LandingUpload onSubmit={createFromDocs} />
                   <div className="relative my-4">
                     <Separator />

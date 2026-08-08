@@ -97,6 +97,71 @@ const MAX_PATIENTS = 4
 const LLM_MODEL = 'gemini/gemini-2.5-pro'
 
 // ---------- AI Care Generation ----------
+async function callLLM(parts, { json = true } = {}) {
+  const KEY = process.env.EMERGENT_LLM_KEY
+  const BASE = process.env.EMERGENT_LLM_BASE_URL
+  if (!KEY || !BASE) throw new Error('LLM not configured')
+  const res = await fetch(`${BASE}/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${KEY}` },
+    body: JSON.stringify({ model: LLM_MODEL, temperature: 0.1, messages: [{ role: 'user', content: parts }] }),
+  })
+  const bodyText = await res.text()
+  if (!res.ok) {
+    console.error('LLM error', res.status, bodyText.slice(0, 500))
+    if (/no pages|process input image|INVALID_ARGUMENT/i.test(bodyText) && /image|document/i.test(bodyText)) {
+      throw new Error('One of the uploaded images could not be read by the AI. Please upload a clearer, well-lit photo (or a PDF).')
+    }
+    throw new Error('AI service request failed')
+  }
+  let content = ''
+  try { content = JSON.parse(bodyText).choices?.[0]?.message?.content || '' } catch { content = bodyText }
+  if (!json) return content
+  const m = content.match(/\{[\s\S]*\}/)
+  return JSON.parse(m ? m[0] : content)
+}
+
+// Build LLM content parts from raw request documents (dataUrl embedded)
+function docsToParts(documents) {
+  const parts = []
+  for (const doc of documents || []) {
+    parts.push({ type: 'text', text: `--- DOCUMENT: category="${doc.category || 'other'}" name="${doc.name || 'file'}" ---` })
+    if (doc.kind === 'text' || (!doc.dataUrl && doc.textContent)) {
+      parts.push({ type: 'text', text: doc.textContent || '(empty)' })
+    } else if (doc.dataUrl) {
+      const isImage = (doc.mimeType || '').startsWith('image/') || doc.dataUrl.startsWith('data:image/')
+      const isPdf = doc.mimeType === 'application/pdf' || doc.dataUrl.startsWith('data:application/pdf')
+      if (isImage) parts.push({ type: 'image_url', image_url: { url: doc.dataUrl } })
+      else if (isPdf) parts.push({ type: 'file', file: { filename: doc.name, file_data: doc.dataUrl } })
+    }
+  }
+  return parts
+}
+
+// Detect how many patients a handover/allocation sheet contains (1..4)
+async function identifyPatients(documents) {
+  const parts = [{
+    type: 'text',
+    text: `You are reading a nursing handover / shift ALLOCATION sheet. It may describe ONE patient OR SEVERAL patients (a nurse's patient load, usually up to 4).
+Identify each DISTINCT patient in the document(s).
+Return ONLY valid JSON (no markdown): {"patients": [{"name": "", "bed": "", "age": "", "diagnosis": ""}]}.
+Rules:
+- One object per distinct patient, in the order they appear.
+- Maximum 4 patients.
+- If a field is not shown, use "" (empty string). If no name is given, use the bed like "Bed 12" or "Patient 1".
+- "diagnosis" = the primary problem / reason for admission if visible.
+- If there is clearly only ONE patient, return exactly one object.`,
+  }, ...docsToParts(documents)]
+  const out = await callLLM(parts)
+  let list = Array.isArray(out.patients) ? out.patients : []
+  return list.slice(0, MAX_PATIENTS).map((p) => ({
+    name: (p.name || '').toString().trim() || 'Unnamed',
+    bed: (p.bed || '').toString().trim(),
+    age: (p.age || '').toString().trim(),
+    diagnosis: (p.diagnosis || '').toString().trim(),
+  }))
+}
+
 async function generateNursingCare(patient, db) {
   const KEY = process.env.EMERGENT_LLM_KEY
   const BASE = process.env.EMERGENT_LLM_BASE_URL
@@ -117,6 +182,7 @@ PATIENT CONTEXT:
 - Bed/Room: ${patient.bed || 'N/A'}
 - Age: ${patient.age || 'N/A'}
 - Known diagnosis / reason for admission: ${patient.diagnosis || 'See documents'}
+${patient.focusHint ? `\nIMPORTANT — MULTI-PATIENT DOCUMENT: The attached document(s) may list SEVERAL patients (a shift allocation/handover sheet). Generate this care plan for ONE patient ONLY: ${patient.focusHint}. Use ONLY the section(s) that belong to this patient and IGNORE all other patients on the sheet.` : ''}
 
 RULES:
 - Use ONLY information visible in the provided documents and context. Do NOT invent facts, doses, allergies or diagnoses.
@@ -167,6 +233,7 @@ Return ONLY a valid JSON object (no markdown, no commentary) with EXACTLY this s
   },
   "redFlags": [ "signs of deterioration to escalate immediately" ],
   "newGradTips": [ "practical, encouraging tips for a new grad managing this patient" ],
+  "abbreviations": [ { "abbr": "the medical abbreviation/acronym EXACTLY as written in the documents", "meaning": "the full term, plus a short plain-English explanation a new grad can understand" } ],
   "safetyNotice": "one line reminding the nurse to verify with a senior/RN"
 }
 
@@ -187,12 +254,15 @@ For "vitalsTimeline" and "medicationTimes": extract EVERY time-stamped observati
       parts.push({ type: 'text', text: doc.textContent || '(empty)' })
     } else {
       const dataUrl = await resolveDocDataUrl(db, doc)
+      const mt = (doc.mimeType || '').toLowerCase()
+      const isImage = mt.startsWith('image/') || (dataUrl || '').startsWith('data:image/')
+      const isPdf = mt === 'application/pdf' || (dataUrl || '').startsWith('data:application/pdf')
       if (!dataUrl) {
         parts.push({ type: 'text', text: `(File "${doc.name}" could not be loaded; skipped)` })
-      } else if (doc.mimeType === 'application/pdf') {
-        parts.push({ type: 'file', file: { filename: doc.name, file_data: dataUrl } })
-      } else if (doc.mimeType && doc.mimeType.startsWith('image/')) {
+      } else if (isImage) {
         parts.push({ type: 'image_url', image_url: { url: dataUrl } })
+      } else if (isPdf) {
+        parts.push({ type: 'file', file: { filename: doc.name, file_data: dataUrl } })
       } else {
         parts.push({ type: 'text', text: `(Unsupported file type ${doc.mimeType}; skipped)` })
       }
@@ -316,6 +386,12 @@ function applySamplePreset(patient, type, h, now) {
       edd: 'Not documented — acute phase',
       recommendations: ['Continue sepsis pathway', 'Hourly obs + urine output', 'Repeat lactate and reassess fluids at 1200', 'Medical review for ongoing antibiotics/ICU consideration'],
       outstandingTasks: ['Insert IDC', 'Send repeat bloods', 'Update family', 'Chart fluid balance total'],
+      abbreviations: [
+        { abbr: 'UTI', meaning: 'Urinary Tract Infection — infection in the urinary system, a common source of sepsis.' },
+        { abbr: 'MET', meaning: 'Medical Emergency Team — rapid response team you call when a patient meets escalation criteria.' },
+        { abbr: 'IDC', meaning: 'Indwelling Catheter — a tube in the bladder to drain and accurately measure urine output.' },
+        { abbr: 'BGL', meaning: 'Blood Glucose Level — bedside blood sugar reading, important in diabetics.' },
+      ],
       safetyNotice: 'This is a demo. Always verify medications, doses and escalation with your senior/RN.',
     }
     patient.ewHistory = [ { t: h(3), score: 4, risk: 'medium', riskValue: 2 }, { t: h(1), score: 6, risk: 'high', riskValue: 3 }, { t: now, score: 8, risk: 'high', riskValue: 3 } ]
@@ -390,6 +466,12 @@ function applySamplePreset(patient, type, h, now) {
       edd: 'Tomorrow if tolerating diet, mobilising and pain controlled',
       recommendations: ['Continue regular analgesia + PRN', 'Encourage mobilising and diet', 'Remove IV when oral tolerated', 'Discharge planning for tomorrow'],
       outstandingTasks: ['Afternoon obs', 'Reassess IV need', 'Provide discharge education', 'Confirm follow-up appointment'],
+      abbreviations: [
+        { abbr: 'TDS', meaning: 'Ter Die Sumendum — three times a day (medication frequency).' },
+        { abbr: 'PRN', meaning: 'Pro Re Nata — given "as needed" rather than at set times.' },
+        { abbr: 'IV', meaning: 'Intravenous — into the vein (e.g. IV cannula for fluids/medicines).' },
+        { abbr: 'DVT', meaning: 'Deep Vein Thrombosis — a blood clot in a deep vein; early mobilising helps prevent it.' },
+      ],
       safetyNotice: 'This is a demo. Always verify medications, doses and escalation with your senior/RN.',
     }
     patient.ewHistory = [ { t: h(3), score: 1, risk: 'low', riskValue: 1 }, { t: h(1), score: 0, risk: 'low', riskValue: 1 }, { t: now, score: 0, risk: 'low', riskValue: 1 } ]
@@ -515,6 +597,12 @@ async function handleRoute(request, { params }) {
           edd: 'Not documented — pending stabilisation',
           recommendations: ['Continue diuresis and oxygen', 'Half-hourly obs while deteriorating', 'Urgent medical review', 'Strict fluid balance + daily weights'],
           outstandingTasks: ['1200 BGL', '1400 furosemide dose', 'Update fluid balance total', 'Handover deterioration to team'],
+          abbreviations: [
+            { abbr: 'CHF', meaning: 'Congestive Heart Failure — the heart can’t pump effectively, causing fluid to back up in the lungs/body.' },
+            { abbr: 'SpO2', meaning: 'Peripheral oxygen saturation — % of oxygen in the blood, measured on a finger probe.' },
+            { abbr: 'MET', meaning: 'Medical Emergency Team — rapid response team for a deteriorating patient.' },
+            { abbr: 'BGL', meaning: 'Blood Glucose Level — bedside blood sugar reading.' },
+          ],
           safetyNotice: 'This is a demo. Always verify medications, doses and escalation with your senior/RN.',
         },
         aiGeneratedAt: now,
@@ -558,7 +646,55 @@ async function handleRoute(request, { params }) {
       return json(clean)
     }
 
-    // ---- Single patient ----
+    // ---- Ingest: detect 1..4 patients from an uploaded sheet, create them, attach docs ----
+    if (route === '/ingest' && method === 'POST') {
+      const body = await request.json()
+      const documents = Array.isArray(body.documents) ? body.documents : []
+      if (!documents.length) return json({ error: 'No documents provided' }, 400)
+      const existing = await db.collection('patients').countDocuments()
+      const slots = MAX_PATIENTS - existing
+      if (slots <= 0) return json({ error: `Patient load is full (max ${MAX_PATIENTS} patients). Discharge a patient first.` }, 400)
+
+      let detected
+      try {
+        detected = await identifyPatients(documents)
+      } catch (e) {
+        return json({ error: e.message || 'Could not read the uploaded document' }, 400)
+      }
+      if (!detected.length) detected = [{ name: 'Unnamed', bed: '', age: '', diagnosis: '' }]
+      const multi = detected.length > 1
+      const toCreate = detected.slice(0, slots)
+      const created = []
+      for (const d of toCreate) {
+        const pid = uuidv4()
+        const docsMeta = []
+        for (const doc of documents) {
+          const docId = uuidv4()
+          const kind = doc.kind || (doc.textContent ? 'text' : 'file')
+          let hasFile = false
+          if (kind !== 'text' && doc.dataUrl) {
+            try { hasFile = await storeFile(db, docId, pid, doc.dataUrl, doc.mimeType) } catch (e) { console.error('ingest storeFile', e?.message) }
+          }
+          docsMeta.push({ id: docId, name: doc.name || 'Untitled', category: doc.category || 'other', kind, mimeType: doc.mimeType || null, dataUrl: null, hasFile, textContent: doc.textContent || null, uploadedAt: new Date() })
+        }
+        const patient = {
+          id: pid,
+          name: d.name || 'Unnamed',
+          bed: d.bed || '',
+          age: d.age || '',
+          diagnosis: d.diagnosis || '',
+          focusHint: multi ? `${d.name || 'this patient'}${d.bed ? ' (bed ' + d.bed + ')' : ''}${d.diagnosis ? ' — ' + d.diagnosis : ''}` : null,
+          documents: docsMeta,
+          aiOutput: null,
+          aiGeneratedAt: null,
+          createdAt: new Date(),
+        }
+        await db.collection('patients').insertOne(patient)
+        const { _id, documents: dd, ...rest } = patient
+        created.push({ ...rest, documents: dd.map(({ dataUrl, ...x }) => x) })
+      }
+      return json({ patients: created, detectedCount: detected.length, created: created.length, truncated: detected.length > created.length })
+    }
     if (seg[0] === 'patients' && seg[1]) {
       const id = seg[1]
       const patient = await db.collection('patients').findOne({ id })

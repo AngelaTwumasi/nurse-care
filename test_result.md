@@ -275,10 +275,11 @@ metadata:
   created_by: "main_agent"
   version: "1.8"
   test_sequence: 11
-  run_ui: false
+  run_ui: true
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "All Round 12 UI features tested and verified"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -955,6 +956,106 @@ agent_communication:
       
       NO CRITICAL ISSUES FOUND. All Round 8 UI features working correctly and production-ready.
 
+
+  - task: "Round 12 UI: Risk legend, Sample dropdown, Card search, Worsen button, Handover note, Document viewer"
+    implemented: true
+    working: true
+    file: "/app/app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Round 12 UI features: (1) Risk legend shows when patients exist with High/Medium/Low/Not populated colored dots. (2) Sample button opens dropdown with 3 options (Sepsis, Post-op, CHF) that add pre-populated demo patients. (3) Card search filters by name/bed/diagnosis with clear button and 'No patients match' message. (4) Worsen button (siren icon) on demo cards escalates risk badge. (5) Shift handover note textarea in patient workspace saves and persists. (6) Document viewer opens on document click showing content with 'All documents' list."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ ROUND 12 UI TESTING COMPLETE - ALL 6 FEATURES VERIFIED WORKING. Comprehensive E2E testing at https://web-nurse-app.preview.emergentagent.com. (1) RISK LEGEND ✅: Verified visible when at least one patient exists. Shows 'Risk key:' label with 4 colored dots and labels: High (red), Medium (amber), Low (emerald), Not populated (grey). All 4 risk levels rendered correctly. (2) SAMPLE VARIETY DROPDOWN ✅: Clicked 'Sample' button in toolbar, dropdown menu opened with 3 options: 'Sepsis (deteriorating)' (high risk, urosepsis), 'Post-op (stable)' (low risk, day 1 appendicectomy), 'Heart failure (CHF)' (worsening, fluid overload). Clicked 'Post-op (stable)', demo patient 'DEMO · Mr. Tom Fischer' added successfully with low risk badge (green/emerald). Patient opened automatically showing full care plan. (3) CARD SEARCH ✅: Search input with placeholder 'Search name, bed or diagnosis…' found and functional. Typed 'zzzzz' (nonsense term), 'No patients match \"zzzzz\"' message displayed with 'Clear search' link. Clicked 'Clear search' link, search input cleared successfully. X button also present for clearing search. All search functionality working correctly. (4) WORSEN BUTTON ✅: Found siren icon button (title 'Simulate deterioration (demo)') on demo patient card next to printer and Update buttons. Button only visible on demo/sample patients with AI generated (isSample=true and aiOutput exists). Clicked worsen button multiple times, risk badge escalated from 'low risk' (emerald) toward 'medium risk' and 'high risk' as expected. Success toast 'Deterioration simulated…' appeared on each click. Scenario timer feature working correctly. (5) SHIFT HANDOVER NOTE ✅: Opened demo patient workspace, scrolled to bottom, found 'Shift handover note' card with textarea (placeholder 'e.g. Family updated. Awaiting bloods at 1600…'). Typed test note 'Family updated; awaiting bloods at 1600.' Clicked 'Save note' button, success toast 'Handover note saved' appeared. Navigated back to shift dashboard, re-opened patient, scrolled to handover section, note text persisted correctly. Handover note editor fully functional with save and persistence working. (6) DOCUMENT VIEWER ✅: In patient workspace, found 'Uploaded documents (1)' section showing 'Care plan & obs (demo)' document with 'tap to open' text. Clicked document row, DocViewer dialog opened displaying document content (text note shown in <pre> element with care plan details). Dialog shows document title in header, content preview area, and 'All documents' list on right side for switching between documents. Close dialog with Escape key works. Document viewer via GridFS content endpoint fully functional. CLEANUP: Demo patient 'DEMO · Mr. Tom Fischer' discharged successfully via Discharge button and confirmation dialog. Patient 'paul' preserved as instructed (not deleted). Screenshots captured: round12_initial_dashboard.png (risk legend visible), round12_sample_dropdown.png (3 dropdown options), round12_demo_patient_added.png (patient workspace with documents and handover note), round12_handover_typed.png (handover note with text), round12_final_initial.png (dashboard with both patients and worsen button visible on demo card), round12_final_search_no_match.png (no match message and clear link). NO CRITICAL ISSUES FOUND. All 6 Round 12 UI features working correctly and production-ready."
+
+    -agent: "testing"
+    -message: |
+      ✅ ROUND 12 UI TESTING COMPLETE - ALL 6 FEATURES PASSED (6/6)
+      
+      Comprehensive E2E UI testing completed successfully at https://web-nurse-app.preview.emergentagent.com
+      
+      Test Results Summary:
+      
+      1. ✅ RISK LEGEND - WORKING
+         - Visible when at least one patient exists on dashboard
+         - Shows "Risk key:" label followed by 4 colored dots with labels
+         - High (red dot), Medium (amber dot), Low (emerald dot), Not populated (grey dot)
+         - Positioned above patient card grid, next to search box
+         - All 4 risk levels render correctly
+      
+      2. ✅ SAMPLE VARIETY DROPDOWN - WORKING
+         - "Sample" button in top toolbar opens DROPDOWN menu (not instant add)
+         - 3 options visible: "Sepsis (deteriorating)", "Post-op (stable)", "Heart failure (CHF)"
+         - Clicked "Post-op (stable)" option
+         - Demo patient "DEMO · Mr. Tom Fischer" added successfully
+         - Patient has low risk badge (green/emerald) as expected for stable post-op
+         - App opens patient workspace automatically after adding
+         - Returned to shift, demo card visible with risk badge
+      
+      3. ✅ CARD SEARCH - WORKING
+         - Search input with placeholder "Search name, bed or diagnosis…" found
+         - Typed "zzzzz" (nonsense term)
+         - "No patients match \"zzzzz\"" message displayed correctly
+         - "Clear search" link present and functional
+         - Clicked "Clear search" link, search input cleared successfully
+         - X button also present for clearing search
+         - All search filtering and clearing functionality working
+      
+      4. ✅ WORSEN BUTTON (Scenario timer) - WORKING
+         - Found siren icon button on demo patient card (next to printer/Update buttons)
+         - Button title: "Simulate deterioration (demo)"
+         - Button only appears on demo/sample patients with AI generated (isSample=true + aiOutput exists)
+         - Clicked worsen button 3-4 times
+         - Success toast "Deterioration simulated…" appeared on each click
+         - Risk badge escalated from "low risk" (emerald) toward "medium" and "high" risk
+         - Scenario timer feature working correctly for training purposes
+      
+      5. ✅ SHIFT HANDOVER NOTE - WORKING
+         - Opened demo patient workspace
+         - Found "Shift handover note" card in LEFT column below "Uploaded documents"
+         - Textarea with placeholder text present
+         - Typed "Family updated; awaiting bloods at 1600."
+         - Clicked "Save note" button
+         - Success toast "Handover note saved" appeared
+         - Navigated back to shift, re-opened patient
+         - Note text persisted correctly (verified on re-open)
+         - Handover note editor fully functional with save and persistence
+      
+      6. ✅ DOCUMENT VIEWER (via GridFS content endpoint) - WORKING
+         - In patient workspace, found "Uploaded documents" section
+         - Demo patient has 1 document: "Care plan & obs (demo)"
+         - Clicked document row (with "tap to open" text)
+         - DocViewer dialog opened successfully
+         - Document content visible (text note displayed in preview area)
+         - Dialog shows document title in header
+         - "All documents" list visible on right side for switching between docs
+         - Close dialog with Escape key works
+         - Document viewer fully functional
+      
+      General Smoke Check:
+      ✅ No uncaught JavaScript console errors on dashboard or patient workspace
+      ✅ All UI interactions smooth and responsive
+      ✅ Toast notifications working correctly
+      ✅ Navigation between shift dashboard and patient workspace working
+      
+      Cleanup:
+      ✅ Demo patient "DEMO · Mr. Tom Fischer" discharged successfully
+      ✅ Patient "paul" preserved as instructed (not deleted)
+      
+      Screenshots Captured:
+      - round12_initial_dashboard.png (risk legend visible)
+      - round12_risk_legend.png (all 4 risk levels)
+      - round12_sample_dropdown.png (3 dropdown options)
+      - round12_demo_patient_added.png (patient workspace with documents)
+      - round12_handover_typed.png (handover note with text)
+      - round12_final_initial.png (dashboard with worsen button visible)
+      - round12_final_search_no_match.png (no match message)
+      
+      NO CRITICAL ISSUES FOUND. All 6 Round 12 UI features working correctly and production-ready.
 
 agent_communication:
     -agent: "main"

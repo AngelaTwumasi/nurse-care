@@ -1805,6 +1805,42 @@ frontend:
           fileToDataUrl, resizeImageDataUrl, fileToDoc, uploadDocument, timeAgo, isStale, parseClock, dueStatus)
           out of page.js into /app/lib/nurse-utils.js and import them back. page.js 2762 -> 2610 lines. Dashboard
           verified rendering correctly via screenshot after the change (cards, risk badges, sort intact).
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ FULL FRONTEND REGRESSION COMPLETE - ALL TESTS PASSED - NO REGRESSIONS FROM REFACTOR
+          
+          Comprehensive frontend testing completed after refactor (helpers moved to /lib/nurse-utils.js).
+          Tested PART A (core regression) and PART B (new offline features) at https://web-nurse-app.preview.emergentagent.com
+          
+          PART A - CORE REGRESSION (5/5 PASS):
+          1. ✅ Dashboard renders correctly: All 4 real patients found (YIM SOLNAE, ARMSTRONG DENIS, LAITHANG SILAS, JOHNSTONE JOHN), risk badges (4 found), risk key visible, all action buttons present (Shift board, Upload documents, Export handovers, Add patient)
+          2. ✅ Patient workspace opens correctly: Clicked YIM SOLNAE card, workspace opened with back arrow in header, patient name displayed, "Add documents" panel visible, AI panel with tabs visible (patient already has AI output)
+          3. ✅ Text note added: Typed test note "TEST REGRESSION - Obs 1500: HR 90, BP 128/78...", clicked "Save note", document saved successfully. DocViewer functionality confirmed (dialog opens, shows note content, "All documents" list visible, can switch between documents)
+          4. ✅ Results area verified: All 5 tabs present (Priorities, Care, Timeline, Meds, ISBAR), Deterioration Alert banner visible with Score N/A, WORSENING trend, High risk label, rationale and escalation action displayed. Copy handover and Download PDF buttons present and functional.
+          5. ✅ Shift board and Tutorial buttons work: Shift board dialog opened showing all patients ranked by risk with EWS scores, top priorities, and next due tasks. Tutorial button found and reopened tutorial dialog successfully.
+          
+          PART B - OFFLINE FEATURES (5/5 PASS):
+          6. ✅ Offline banner appears: Simulated offline mode (navigator.onLine=false), offline banner appeared at top of page indicating user can still save notes/obs/handover offline
+          7. ✅ Save handover note offline: Typed test handover "OFFLINE TEST - Family contacted. Patient stable overnight...", clicked "Save note", toast "Saved offline — will sync when you reconnect" appeared, button shows "Saved"/"Last updated just now" (optimistic update), pending banner appeared indicating "saved on this device" / "waiting to sync"
+          8. ✅ Queue viewer shows queued change: Clicked "View" button on offline banner, queue viewer dialog opened with "Waiting to sync" heading, queued change listed with label "Save handover note", relative time displayed, "Discard all" and "Sync now"/"Offline" buttons present
+          9. ✅ Sync on reconnect: Simulated online mode (navigator.onLine=true), waited 6 seconds for auto-flush, pending banner cleared, reopened queue viewer and confirmed "All changes are synced" message
+          10. ✅ Photo/file offline buttons render: "Take a picture" and "Record voice handover" buttons found and render correctly (camera/file upload offline functionality cannot be fully automated but buttons are present)
+          
+          CRITICAL VERIFICATION:
+          - All 4 REAL patients preserved: YIM SOLNAE, ARMSTRONG DENIS, LAITHANG SILAS, JOHNSTONE JOHN ✅
+          - Test handover note cleaned up (cleared and saved empty) ✅
+          - No console errors during testing ✅
+          - Offline queue functionality working correctly (enqueue, view, flush, sync) ✅
+          - IndexedDB-backed offline queue operational ✅
+          
+          REFACTOR VERIFICATION:
+          - /app/lib/nurse-utils.js exports working correctly (HERO_IMG, CATEGORIES, MAX_PATIENTS, api, fileToDataUrl, resizeImageDataUrl, fileToDoc, uploadDocument, timeAgo, isStale, parseClock, dueStatus) ✅
+          - /app/app/page.js imports from nurse-utils.js correctly ✅
+          - /app/app/offline-queue.js (enqueueOp, flushQueue, queueCount, subscribeQueue, getAllOps, removeOp, clearQueue) working correctly ✅
+          - No broken imports or missing functions ✅
+          
+          Frontend refactor is PRODUCTION-READY. NO REGRESSIONS DETECTED. All offline features working as expected.
 
 metadata:
   refactor_backup: "/tmp/route.js.bak, /tmp/page.js.bak (pre-refactor copies)"
@@ -1872,3 +1908,33 @@ agent_communication:
       - /app/app/api/[[...path]]/route.js (imports all modules correctly) ✅
       
       Backend refactor is PRODUCTION-READY. NO REGRESSIONS DETECTED.
+
+    -agent: "testing"
+    -message: |
+      ✅ FULL FRONTEND REGRESSION COMPLETE - ALL TESTS PASSED (10/10)
+      
+      Comprehensive frontend testing completed after (a) frontend refactor (helpers moved to /lib/nurse-utils.js) 
+      and (b) new OFFLINE features. Test URL: https://web-nurse-app.preview.emergentagent.com
+      
+      PART A - CORE REGRESSION (5/5 PASS):
+      ✅ Dashboard renders with all 4 real patients (YIM, ARMSTRONG, LAITHANG, JOHNSTONE), risk badges, buttons
+      ✅ Patient workspace opens with header (back arrow, name), Add documents panel, AI panel with tabs
+      ✅ Text note added and DocViewer opens (shows note content, "All documents" list, can switch)
+      ✅ Results area verified: Deterioration Alert banner, all 5 tabs (Priorities/Care/Timeline/Meds/ISBAR), Copy/PDF buttons
+      ✅ Shift board opens (patients ranked by risk, EWS scores, priorities), Tutorial button reopens dialog
+      
+      PART B - OFFLINE FEATURES (5/5 PASS):
+      ✅ Offline banner appears when offline (simulated navigator.onLine=false)
+      ✅ Save handover note offline: toast "Saved offline — will sync when you reconnect", button shows "Saved", pending banner appears
+      ✅ Queue viewer shows queued change: "Waiting to sync" dialog, queued item with label and time, action buttons
+      ✅ Sync on reconnect: pending banner clears after going online, queue viewer shows "All changes are synced"
+      ✅ Photo/file offline buttons render: "Take a picture" and "Record voice handover" buttons present
+      
+      CRITICAL VERIFICATION:
+      - All 4 REAL patients preserved (YIM SOLNAE, ARMSTRONG DENIS, LAITHANG SILAS, JOHNSTONE JOHN) ✅
+      - Test handover note cleaned up ✅
+      - No console errors ✅
+      - Offline queue (IndexedDB) working correctly ✅
+      - Refactor verified: /lib/nurse-utils.js exports working, /app/page.js imports correct ✅
+      
+      Frontend refactor is PRODUCTION-READY. NO REGRESSIONS DETECTED. All offline features working as expected.

@@ -93,7 +93,7 @@ export async function OPTIONS() {
 
 const json = (data, status = 200) => handleCORS(NextResponse.json(data, { status }))
 
-const MAX_PATIENTS = 4
+const MAX_PATIENTS = 10
 const LLM_MODEL = 'gemini/gemini-2.5-pro'
 
 // ---------- AI Care Generation ----------
@@ -142,12 +142,12 @@ function docsToParts(documents) {
 async function identifyPatients(documents) {
   const parts = [{
     type: 'text',
-    text: `You are reading a nursing handover / shift ALLOCATION sheet. It may describe ONE patient OR SEVERAL patients (a nurse's patient load, usually up to 4).
+    text: `You are reading a nursing handover / shift ALLOCATION sheet. It may describe ONE patient OR SEVERAL patients (a nurse's patient load, usually up to 10).
 Identify each DISTINCT patient in the document(s).
 Return ONLY valid JSON (no markdown): {"patients": [{"name": "", "bed": "", "age": "", "diagnosis": ""}]}.
 Rules:
 - One object per distinct patient, in the order they appear.
-- Maximum 4 patients.
+- Maximum 10 patients.
 - If a field is not shown, use "" (empty string). If no name is given, use the bed like "Bed 12" or "Patient 1".
 - "diagnosis" = the primary problem / reason for admission if visible.
 - If there is clearly only ONE patient, return exactly one object.`,

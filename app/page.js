@@ -26,7 +26,7 @@ import {
   ClipboardCheck, Loader2, BookOpen, User, BedDouble, AlertTriangle, Lightbulb,
   CheckCircle2, FileUp, StickyNote, X, Download, Copy, Clock, TrendingUp,
   TrendingDown, Minus, Gauge, Siren, Volume2, Square, LayoutGrid,
-  Dumbbell, Apple, UserRound, CalendarClock, GripVertical, Users, ArrowDownWideNarrow, Printer, Search, Camera, WifiOff,
+  Dumbbell, Apple, UserRound, CalendarClock, GripVertical, Users, ArrowDownWideNarrow, Printer, Search, Camera, WifiOff, Pencil,
 } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -49,7 +49,7 @@ const CATEGORIES = {
   other: { label: 'Other Documents', icon: FileText, color: 'text-slate-600' },
 }
 
-const MAX_PATIENTS = 4
+const MAX_PATIENTS = 10
 
 async function api(path, opts = {}) {
   const res = await fetch(`/api${path}`, {
@@ -168,7 +168,7 @@ const TUTORIAL_STEPS = [
   {
     icon: User,
     title: '1. Build your patient load',
-    body: 'Add up to 4 patients \u2014 just like a typical shift. Give each a name, bed/room, age and their reason for admission.',
+    body: 'Add up to 10 patients \u2014 just like a busy shift. Give each a name, bed/room, age and their reason for admission.',
   },
   {
     icon: FileUp,
@@ -469,7 +469,7 @@ function WelcomeLanding({ onSubmit, onSample, onContinue, count }) {
         {count > 0 && (
           <button onClick={onContinue} className="mb-3 inline-flex items-center gap-1 text-sm text-primary hover:underline"><ArrowLeft className="h-4 w-4" /> Back to my shift ({count})</button>
         )}
-        <p className="mb-4 text-sm text-muted-foreground">Upload your shift sheet or a patient’s documents — snap a photo or choose a PDF/image. NurseCare reads it, creates <b>every patient it finds (up to 4)</b> and populates all their care plans automatically.</p>
+        <p className="mb-4 text-sm text-muted-foreground">Upload your shift sheet or a patient’s documents — snap a photo or choose a PDF/image. NurseCare reads it, creates <b>every patient it finds (up to 10)</b> and populates all their care plans automatically.</p>
         <LandingUpload onSubmit={onSubmit} />
         <div className="relative my-4"><Separator /><span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-card px-2 text-xs text-muted-foreground">or</span></div>
         <Button variant="outline" className="w-full gap-2" onClick={() => onSample()}><Sparkles className="h-4 w-4 text-primary" /> Try a sample patient (ready-made care plan)</Button>
@@ -1570,6 +1570,44 @@ function HandoverNote({ value, savedAt, onSave }) {
   )
 }
 
+function EditPatientDialog({ patient, onSave }) {
+  const [open, setOpen] = useState(false)
+  const [form, setForm] = useState({ name: '', bed: '', age: '', diagnosis: '' })
+  const [saving, setSaving] = useState(false)
+  useEffect(() => {
+    if (open) setForm({ name: patient.name || '', bed: patient.bed || '', age: patient.age || '', diagnosis: patient.diagnosis || '' })
+  }, [open, patient])
+  const save = async () => {
+    if (!form.name.trim()) { toast.error('Name is required'); return }
+    setSaving(true)
+    try { await onSave(form); setOpen(false) } finally { setSaving(false) }
+  }
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" title="Edit patient details"><Pencil className="h-4 w-4" /></Button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Edit patient details</DialogTitle>
+          <DialogDescription>Correct the name, bed, age or diagnosis that was auto-detected from the sheet.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1.5"><Label>Name</Label><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Patient name" /></div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5"><Label>Bed / Room</Label><Input value={form.bed} onChange={(e) => setForm({ ...form, bed: e.target.value })} placeholder="e.g. Bed 3" /></div>
+            <div className="space-y-1.5"><Label>Age</Label><Input value={form.age} onChange={(e) => setForm({ ...form, age: e.target.value })} placeholder="e.g. 68" /></div>
+          </div>
+          <div className="space-y-1.5"><Label>Diagnosis</Label><Input value={form.diagnosis} onChange={(e) => setForm({ ...form, diagnosis: e.target.value })} placeholder="Primary diagnosis" /></div>
+        </div>
+        <DialogFooter>
+          <Button onClick={save} disabled={saving} className="gap-2">{saving && <Loader2 className="h-4 w-4 animate-spin" />} Save changes</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function PatientDetail({ patient, onBack, refresh, onDelete }) {
   const [busy, setBusy] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(null)
@@ -1674,6 +1712,14 @@ function PatientDetail({ patient, onBack, refresh, onDelete }) {
     } catch (e) { toast.error(e.message) }
   }
 
+  const savePatientDetails = async (form) => {
+    try {
+      await api(`/patients/${patient.id}`, { method: 'PUT', body: JSON.stringify(form) })
+      toast.success('Patient details updated')
+      await refresh()
+    } catch (e) { toast.error(e.message) }
+  }
+
   return (
     <div className="space-y-5">
       <DocViewer open={viewerOpen} onOpenChange={setViewerOpen} documents={patient.documents || []} currentIndex={viewIndex} setCurrentIndex={setViewIndex} patientId={patient.id} />
@@ -1704,7 +1750,10 @@ function PatientDetail({ patient, onBack, refresh, onDelete }) {
         <CardContent className="pt-5">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h2 className="text-2xl font-bold tracking-tight">{patient.name}</h2>
+              <div className="flex items-center gap-2">
+                <h2 className="text-2xl font-bold tracking-tight">{patient.name}</h2>
+                <EditPatientDialog patient={patient} onSave={savePatientDetails} />
+              </div>
               <div className="mt-1 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
                 {patient.bed && <span className="inline-flex items-center gap-1"><BedDouble className="h-4 w-4" /> {patient.bed}</span>}
                 {patient.age && <span className="inline-flex items-center gap-1"><User className="h-4 w-4" /> {patient.age} years</span>}
@@ -1898,6 +1947,7 @@ function App() {
   const [online, setOnline] = useState(true)
   const [installPrompt, setInstallPrompt] = useState(null)
   const [isStandalone, setIsStandalone] = useState(false)
+  const [showInstallTip, setShowInstallTip] = useState(false)
 
   useEffect(() => {
     const set = () => setOnline(navigator.onLine)
@@ -1909,6 +1959,9 @@ function App() {
     window.addEventListener('beforeinstallprompt', onBip)
     window.addEventListener('appinstalled', onInstalled)
     setIsStandalone(window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true)
+    const standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true
+    const isMobile = /android|iphone|ipad|ipod/i.test(navigator.userAgent)
+    if (!standalone && isMobile && localStorage.getItem('nursecare_install_tip') !== '1') setShowInstallTip(true)
     return () => {
       window.removeEventListener('online', set)
       window.removeEventListener('offline', set)
@@ -1928,6 +1981,8 @@ function App() {
     if (isIOS) toast('On iPhone/iPad: tap the Share button, then “Add to Home Screen”.', { duration: 7000 })
     else toast('In your browser menu, choose “Install app” / “Add to Home screen”.', { duration: 7000 })
   }
+
+  const dismissInstallTip = () => { try { localStorage.setItem('nursecare_install_tip', '1') } catch {}; setShowInstallTip(false) }
   const prevRiskRef = useRef({})
   const firstLoadRef = useRef(true)
   const [bulk, setBulk] = useState(null) // {done,total} while populating all
@@ -2203,6 +2258,19 @@ function App() {
           <WelcomeLanding onSubmit={async (docs) => { await createFromDocs(docs); setShowHome(false) }} onSample={(t) => { addSample(t); setShowHome(false) }} onContinue={() => setShowHome(false)} count={patients.length} />
         ) : (
           <>
+            {showInstallTip && (
+              <div className="mb-4 flex items-start gap-3 rounded-lg border border-primary/30 bg-primary/5 p-3">
+                <div className="mt-0.5 rounded-lg bg-primary p-1.5 text-primary-foreground"><Download className="h-4 w-4" /></div>
+                <div className="flex-1 text-sm">
+                  <p className="font-semibold text-foreground">Add NurseCare to your home screen</p>
+                  <p className="text-muted-foreground">Install it like an app for one-tap access and offline viewing on your phone.</p>
+                </div>
+                <div className="flex items-center gap-1">
+                  <Button size="sm" onClick={() => { installApp(); dismissInstallTip() }}>Install</Button>
+                  <Button size="icon" variant="ghost" className="h-8 w-8" onClick={dismissInstallTip} aria-label="Dismiss"><X className="h-4 w-4" /></Button>
+                </div>
+              </div>
+            )}
             {escalated.length > 0 && (
               <div className="mb-4 flex items-start gap-3 rounded-lg border-2 border-red-300 bg-red-50 p-4 text-red-800 animate-in fade-in slide-in-from-top-2">
                 <div className="mt-0.5 rounded-lg bg-red-600 p-1.5 text-white"><Siren className="h-5 w-5" /></div>
@@ -2238,6 +2306,11 @@ function App() {
                 <Button variant="outline" onClick={() => setShowHome(true)} className="gap-2">
                   <FileUp className="h-4 w-4" /> Upload documents
                 </Button>
+                {patients.some((p) => p.aiOutput) && (
+                  <Button variant="outline" onClick={() => downloadHandoverPack(patients)} className="gap-2">
+                    <Download className="h-4 w-4" /> Export handovers
+                  </Button>
+                )}
                 <AddPatientDialog onAdd={addPatient} reload={load} disabled={patients.length >= MAX_PATIENTS} />
               </div>
             </div>
@@ -2283,7 +2356,7 @@ function App() {
                   </div>
                 </div>
                 <CardContent className="pt-5">
-                  <p className="mb-4 text-sm text-muted-foreground">Upload your shift sheet or a patient’s documents — care plan, meds, vitals, doctor or allied-health notes. Snap a photo or choose a PDF/image. NurseCare reads it, creates <b>every patient it finds (up to 4)</b> and populates all their care plans automatically.</p>
+                  <p className="mb-4 text-sm text-muted-foreground">Upload your shift sheet or a patient’s documents — care plan, meds, vitals, doctor or allied-health notes. Snap a photo or choose a PDF/image. NurseCare reads it, creates <b>every patient it finds (up to 10)</b> and populates all their care plans automatically.</p>
                   <LandingUpload onSubmit={createFromDocs} />
                   <div className="relative my-4">
                     <Separator />
@@ -2319,7 +2392,7 @@ function App() {
                     />
                   )
                 })}
-                {!search.trim() && Array.from({ length: MAX_PATIENTS - patients.length }).map((_, i) => (
+                {!search.trim() && Array.from({ length: Math.min(MAX_PATIENTS - patients.length, 2) }).map((_, i) => (
                   <AddPatientDialog
                     key={`empty-${i}`}
                     onAdd={addPatient}

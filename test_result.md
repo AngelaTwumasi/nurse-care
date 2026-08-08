@@ -111,7 +111,7 @@ user_problem_statement: |
   red flags and new-grad tips. Includes an interactive onboarding tutorial.
 
 backend:
-  - task: "Patients CRUD (max 4 per shift)"
+  - task: "Patients CRUD (max 10 per shift - raised from 4)"
     implemented: true
     working: true
     file: "/app/app/api/[[...path]]/route.js"
@@ -125,6 +125,9 @@ backend:
         -working: true
         -agent: "testing"
         -comment: "✅ All CRUD operations verified working. GET /api/patients returns array. POST creates patient with uuid and enforces max 4 (5th returns 400 with proper error message). GET/:id retrieves patient. PUT/:id updates fields. DELETE/:id removes patient and returns {success:true}. Missing name validation returns 400. All tests passed."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PATIENT LOAD LIMIT RAISED TO 10 - FULLY VERIFIED. Comprehensive backend testing completed. (1) INITIAL STATE: Found 4 existing patients (LAITHANG, YIM, JOHNSTONE, ARMSTRONG). (2) LOAD LIMIT TEST: Successfully created 6 additional patients (LimitTest 1-6) to reach total of 10 patients. All POST requests returned HTTP 200. (3) 11TH PATIENT REJECTION: Attempted to create 11th patient when total=10. Correctly rejected with HTTP 400 and error message 'Patient load is full (max 10 patients per shift). Discharge a patient to add a new one.' ✅ Error message correctly mentions 'max 10' and 'full'. (4) INGEST CAP TEST: Deleted 3 LimitTest patients to free 3 slots (count: 7, free slots: 3). Posted /api/ingest with document containing 6 patients (John Smith/pneumonia, Mary Johnson/knee replacement, Ahmed Khan/COPD, Rosa Diaz/UTI, Tom Wilson/heart failure, Sarah Lee/DKA). Ingest correctly detected 6 patients, created only 3 (respecting free slots), returned truncated=true. Total patient count after ingest: 10 (never exceeded maximum). ✅ INGEST respects remaining slots and returns truncated=true when detected > created. (5) CLEANUP: Deleted all 6 test patients (3 remaining LimitTest + 3 ingested patients). Preserved existing patients (no 'm' or 'paul' found in this test run). Final patient count: 4 (returned to original state). Backend patient load limit increase from 4 to 10 is PRODUCTION-READY."
 
   - task: "Document management (upload files/notes, delete)"
     implemented: true
@@ -1418,5 +1421,47 @@ agent_communication:
       ✅ interventions have 'howToMonitor' field ✅
       
       Cleanup: Test patient deleted successfully.
+
+    -agent: "testing"
+    -message: |
+      ✅ PATIENT LOAD LIMIT INCREASE VERIFIED (4 → 10)
+      
+      Quick verification completed as requested. All tests passed:
+      
+      TEST RESULTS:
+      1. ✅ INITIAL STATE: GET /api/patients returned 4 existing patients
+      
+      2. ✅ LOAD LIMIT TEST: Successfully created 6 additional patients (LimitTest 1-6) to reach total of 10 patients
+         - All POST /api/patients requests returned HTTP 200
+         - Total patient count after creation: 10 ✅
+         - Patient load is now at maximum (10 patients) ✅
+      
+      3. ✅ 11TH PATIENT REJECTION: Attempted to create 11th patient when total=10
+         - Correctly rejected with HTTP 400 ✅
+         - Error message: "Patient load is full (max 10 patients per shift). Discharge a patient to add a new one." ✅
+         - Error message correctly mentions "max 10" and "full" ✅
+      
+      4. ✅ INGEST CAP TEST:
+         - Deleted 3 LimitTest patients to free 3 slots (count: 7, free slots: 3)
+         - Posted /api/ingest with document containing 6 patients (John Smith/pneumonia, Mary Johnson/knee replacement, Ahmed Khan/COPD, Rosa Diaz/UTI, Tom Wilson/heart failure, Sarah Lee/DKA)
+         - Ingest correctly detected 6 patients ✅
+         - Ingest created only 3 patients (respecting free slots) ✅
+         - Ingest returned truncated=true (detected 6 > created 3) ✅
+         - Total patient count after ingest: 10 (never exceeded maximum) ✅
+      
+      5. ✅ CLEANUP: Deleted all 6 test patients (3 remaining LimitTest + 3 ingested patients)
+         - Preserved existing patients (no "m" or "paul" found in this test run)
+         - Final patient count: 4 (returned to original state) ✅
+      
+      SUMMARY:
+      • Patient load limit successfully raised from 4 to 10 ✅
+      • 11th patient correctly rejected with HTTP 400 and proper error message ✅
+      • INGEST endpoint respects remaining slots and returns truncated=true when detected > created ✅
+      • Total patient count never exceeded 10 ✅
+      • All test patients cleaned up successfully ✅
+      • Existing patients preserved (LAITHANG, YIM, JOHNSTONE, ARMSTRONG) ✅
+      
+      Backend patient load limit increase is PRODUCTION-READY.
+
       
       NO CRITICAL ISSUES FOUND. Both new features are PRODUCTION-READY.

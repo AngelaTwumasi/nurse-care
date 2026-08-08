@@ -1,7 +1,7 @@
 {
   "name": "NurseCare — AI Care Plans for New Grad Nurses",
   "short_name": "NurseCare",
-  "description": "Manage up to 4 patients per shift. Upload documents and get AI nursing cares, priorities and ISBAR handover.",
+  "description": "Manage up to 10 patients per shift. Upload documents and get AI nursing cares, priorities and ISBAR handover.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

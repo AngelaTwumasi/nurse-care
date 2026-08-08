@@ -1962,30 +1962,53 @@ function downloadHandoverPack(patients) {
 }
 
 function ShiftBoard({ open, onOpenChange, patients, onOpenPatient }) {
+  const [sortMode, setSortMode] = useState('risk-desc')
+  const scoreOf = (p) => parseFloat(String(p.aiOutput?.earlyWarning?.score ?? '').match(/-?\d+(\.\d+)?/)?.[0] || '0')
+  const byRiskDesc = (a, b) => (riskRank(b.aiOutput?.earlyWarning?.riskLevel) - riskRank(a.aiOutput?.earlyWarning?.riskLevel)) || (scoreOf(b) - scoreOf(a))
+  const sorters = {
+    'risk-desc': byRiskDesc,
+    'risk-asc': (a, b) => -byRiskDesc(a, b),
+    'bed': (a, b) => String(a.bed || '~').localeCompare(String(b.bed || '~'), undefined, { numeric: true }),
+    'name': (a, b) => String(a.name || '').localeCompare(String(b.name || '')),
+  }
+  const sorted = [...patients].sort(sorters[sortMode] || byRiskDesc)
+  // Highest-risk patient stays flagged as "Top priority" regardless of the chosen arrangement
+  const topId = [...patients].sort(byRiskDesc)[0]?.id
+  const OPTIONS = [
+    { key: 'risk-desc', label: 'Risk — highest first' },
+    { key: 'risk-asc', label: 'Risk — lowest first' },
+    { key: 'bed', label: 'Bed / room' },
+    { key: 'name', label: 'Name A–Z' },
+  ]
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-5xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><LayoutGrid className="h-5 w-5 text-primary" /> Shift board</DialogTitle>
-          <DialogDescription>All your patients ranked by risk — early-warning scores, top priority and the next due task.</DialogDescription>
+          <DialogDescription>All your patients — tap a chip below to arrange the board. Shows early-warning scores, top priority and the next due task.</DialogDescription>
         </DialogHeader>
         {patients.length === 0 ? (
           <p className="py-8 text-center text-sm text-muted-foreground">No patients on your shift yet.</p>
         ) : (
           <div className="max-h-[70vh] space-y-3 overflow-y-auto pr-1">
-            <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground"><ArrowDownWideNarrow className="h-3.5 w-3.5" /> Sorted by risk (highest first)</p>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="mr-1 inline-flex items-center gap-1 text-xs font-medium text-muted-foreground"><ArrowDownWideNarrow className="h-3.5 w-3.5" /> Arrange by:</span>
+              {OPTIONS.map((o) => (
+                <button
+                  key={o.key}
+                  onClick={() => setSortMode(o.key)}
+                  className={`rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${sortMode === o.key ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-card text-muted-foreground hover:bg-accent'}`}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {[...patients].sort((a, b) => {
-              const rk = riskRank(b.aiOutput?.earlyWarning?.riskLevel) - riskRank(a.aiOutput?.earlyWarning?.riskLevel)
-              if (rk !== 0) return rk
-              const sb = parseFloat(String(b.aiOutput?.earlyWarning?.score ?? '').match(/-?\d+(\.\d+)?/)?.[0] || '0')
-              const sa = parseFloat(String(a.aiOutput?.earlyWarning?.score ?? '').match(/-?\d+(\.\d+)?/)?.[0] || '0')
-              return sb - sa
-            }).map((p, rank) => {
+            {sorted.map((p) => {
               const ew = p.aiOutput?.earlyWarning
               const pri = [...(p.aiOutput?.priorities || [])].sort((a, b) => (URGENCY_RANK[a.urgency] ?? 3) - (URGENCY_RANK[b.urgency] ?? 3))
               const due = nextDueTask(p)
-              const isTop = rank === 0 && riskRank(ew?.riskLevel) >= 2
+              const isTop = p.id === topId && riskRank(ew?.riskLevel) >= 2
               return (
                 <div key={p.id} className={`flex flex-col rounded-lg border bg-card p-3 ${isTop ? 'border-red-300 ring-1 ring-red-200' : ''}`}>
                   <div className="flex items-center justify-between gap-2">
@@ -2153,6 +2176,7 @@ function App() {
       return typeof patch === 'function' ? patch(prev) : { ...prev, ...patch }
     })
   }, [])
+
   const [sortMode, setSortMode] = useState('risk') // 'manual' | 'risk'
   const [search, setSearch] = useState('')
   const sortModeRef = useRef('risk')

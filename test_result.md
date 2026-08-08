@@ -2176,3 +2176,26 @@ agent_communication:
       MINOR FIX: Added audio/* to safe MIME types for inline serving (line 251 in route.js).
       
       NO CRITICAL ISSUES FOUND. Backend is PRODUCTION-READY.
+
+#====================================================================================================
+# Shift board — tappable "Arrange by" control
+#====================================================================================================
+
+frontend:
+  - task: "Shift board tappable Arrange-by control (Risk high/low, Bed, Name)"
+    implemented: true
+    working: true
+    file: "/app/app/page.js (ShiftBoard)"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Replaced the static "Sorted by risk (highest first)" label with a tappable chip row ("Arrange by:")
+          offering Risk—highest first (default), Risk—lowest first, Bed/room, and Name A-Z. Tapping re-sorts the
+          board and highlights the active chip; the "Top priority" flag tracks the highest-risk patient
+          regardless of arrangement. Self-verified via Playwright (chips render; tapping Bed/Name/Risk re-arranges
+          and updates active state).
+

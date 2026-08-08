@@ -121,3 +121,16 @@ export function subscribeQueue(cb) {
   window.addEventListener(CHANGE_EVENT, cb)
   return () => window.removeEventListener(CHANGE_EVENT, cb)
 }
+
+export async function clearQueue() {
+  try {
+    const db = await openDB()
+    await new Promise((resolve, reject) => {
+      const r = tx(db, 'readwrite').clear()
+      r.onsuccess = () => resolve()
+      r.onerror = () => reject(r.error)
+    })
+    db.close()
+    emitChange()
+  } catch (e) { /* ignore */ }
+}

@@ -29,7 +29,7 @@ import {
   Dumbbell, Apple, UserRound, CalendarClock, GripVertical, Users, ArrowDownWideNarrow, Printer, Search, Camera, WifiOff, Pencil, Mic,
   RefreshCw, CloudUpload,
 } from 'lucide-react'
-import { enqueueOp, flushQueue, queueCount, subscribeQueue } from './offline-queue'
+import { enqueueOp, flushQueue, queueCount, subscribeQueue, getAllOps, removeOp, clearQueue } from './offline-queue'
 import { Switch } from '@/components/ui/switch'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Progress } from '@/components/ui/progress'
@@ -38,143 +38,10 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer, Legend,
 } from 'recharts'
 
-const HERO_IMG = 'https://images.pexels.com/photos/4021772/pexels-photo-4021772.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940'
-
-const CATEGORIES = {
-  careplan: { label: 'Care Plan', icon: ClipboardList, color: 'text-teal-600' },
-  medication: { label: 'Medications', icon: Pill, color: 'text-fuchsia-600' },
-  vitals: { label: 'Vital Signs', icon: Activity, color: 'text-rose-600' },
-  doctor: { label: 'Doctor Notes', icon: UserRound, color: 'text-blue-600' },
-  physiotherapist: { label: 'Physiotherapist', icon: Dumbbell, color: 'text-orange-600' },
-  nutritionist: { label: 'Nutritionist / Dietitian', icon: Apple, color: 'text-green-600' },
-  allied_health: { label: 'Allied Health (other)', icon: HeartPulse, color: 'text-indigo-600' },
-  other: { label: 'Other Documents', icon: FileText, color: 'text-slate-600' },
-}
-
-const MAX_PATIENTS = 10
-
-async function api(path, opts = {}) {
-  const { queueOnFail, label, ...fetchOpts } = opts
-  const method = (fetchOpts.method || 'GET').toUpperCase()
-  // If a write is marked queueable and we're offline, stash it for later instead of failing.
-  if (queueOnFail && typeof navigator !== 'undefined' && !navigator.onLine) {
-    await enqueueOp({ path, method, body: fetchOpts.body, label })
-    return { _queued: true }
-  }
-  try {
-    const res = await fetch(`/api${path}`, {
-      headers: { 'Content-Type': 'application/json' },
-      ...fetchOpts,
-    })
-    const data = await res.json().catch(() => ({}))
-    if (!res.ok) throw new Error(data.error || 'Request failed')
-    return data
-  } catch (e) {
-    // Network error (fetch throws TypeError) on a queueable write -> queue it.
-    if (queueOnFail && (e.name === 'TypeError' || (typeof navigator !== 'undefined' && !navigator.onLine))) {
-      await enqueueOp({ path, method, body: fetchOpts.body, label })
-      return { _queued: true }
-    }
-    throw e
-  }
-}
-
-function fileToDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(reader.result)
-    reader.onerror = reject
-    reader.readAsDataURL(file)
-  })
-}
-
-// Downscale large images (e.g. full-res phone photos) so the AI can reliably read them and storage stays small
-function resizeImageDataUrl(dataUrl, maxDim = 1600, quality = 0.85) {
-  return new Promise((resolve) => {
-    try {
-      const img = document.createElement('img')
-      img.onload = () => {
-        let { width, height } = img
-        if (!width || !height) { resolve(dataUrl); return }
-        if (Math.max(width, height) > maxDim) {
-          const scale = maxDim / Math.max(width, height)
-          width = Math.round(width * scale)
-          height = Math.round(height * scale)
-        }
-        const canvas = document.createElement('canvas')
-        canvas.width = width
-        canvas.height = height
-        canvas.getContext('2d').drawImage(img, 0, 0, width, height)
-        resolve(canvas.toDataURL('image/jpeg', quality))
-      }
-      img.onerror = () => resolve(dataUrl)
-      img.src = dataUrl
-    } catch { resolve(dataUrl) }
-  })
-}
-
-// Convert a File to an upload-ready document (images are downscaled & re-encoded as JPEG)
-async function fileToDoc(file, category) {
-  const dataUrl = await fileToDataUrl(file)
-  if (file.type && file.type.startsWith('image/')) {
-    const resized = await resizeImageDataUrl(dataUrl)
-    return { name: file.name, category, kind: 'file', mimeType: 'image/jpeg', dataUrl: resized }
-  }
-  return { name: file.name, category, kind: 'file', mimeType: file.type, dataUrl }
-}
-
-// Upload a single document with real upload-progress reporting (XHR — fetch has no upload progress)
-function uploadDocument(patientId, doc, onProgress) {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest()
-    xhr.open('POST', `/api/patients/${patientId}/documents`)
-    xhr.setRequestHeader('Content-Type', 'application/json')
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100))
-    }
-    xhr.onload = () => {
-      let data = {}
-      try { data = JSON.parse(xhr.responseText) } catch {}
-      if (xhr.status >= 200 && xhr.status < 300) resolve(data)
-      else reject(new Error(data.error || 'Upload failed'))
-    }
-    xhr.onerror = () => reject(new Error('Network error during upload'))
-    xhr.send(JSON.stringify({ documents: [doc] }))
-  })
-}
-
-function timeAgo(dateStr) {
-  if (!dateStr) return null
-  const s = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000)
-  if (s < 60) return 'just now'
-  const m = Math.floor(s / 60)
-  if (m < 60) return `${m}m ago`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h ${m % 60}m ago`
-  return `${Math.floor(h / 24)}d ago`
-}
-function isStale(dateStr, hours = 4) {
-  if (!dateStr) return false
-  return Date.now() - new Date(dateStr).getTime() > hours * 3600 * 1000
-}
-function parseClock(str) {
-  if (!str) return null
-  const m = String(str).match(/\b(\d{1,2}):?(\d{2})\b/)
-  if (!m) return null
-  const h = parseInt(m[1], 10), mn = parseInt(m[2], 10)
-  if (h > 23 || mn > 59) return null
-  return h * 60 + mn
-}
-function dueStatus(timeStr) {
-  const t = parseClock(timeStr)
-  if (t == null) return null
-  const now = new Date()
-  const cur = now.getHours() * 60 + now.getMinutes()
-  const delta = t - cur
-  if (delta < 0 && delta >= -120) return 'overdue'
-  if (delta >= 0 && delta <= 60) return 'soon'
-  return null
-}
+import {
+  HERO_IMG, CATEGORIES, MAX_PATIENTS, api, fileToDataUrl, resizeImageDataUrl,
+  fileToDoc, uploadDocument, timeAgo, isStale, parseClock, dueStatus,
+} from '@/lib/nurse-utils'
 
 /* ------------------------ Tutorial ------------------------ */
 const TUTORIAL_STEPS = [
@@ -1756,22 +1623,26 @@ function PatientDetail({ patient, onBack, refresh, onDelete, patchDetail }) {
   const uploadFiles = async (files, category) => {
     setBusy(true)
     try {
-      let uploaded = 0
+      let uploaded = 0, queued = 0
       const valid = files.filter((f) => { if (f.size > 25 * 1024 * 1024) { toast.error(`${f.name} is too large (max 25MB)`); return false } return true })
       for (let i = 0; i < valid.length; i++) {
         const f = valid[i]
         const doc = await fileToDoc(f, category)
         setUploadProgress({ name: f.name, pct: 0, index: i + 1, total: valid.length })
-        await uploadDocument(
+        const res = await uploadDocument(
           patient.id,
           doc,
-          (pct) => setUploadProgress({ name: f.name, pct, index: i + 1, total: valid.length })
+          (pct) => setUploadProgress({ name: f.name, pct, index: i + 1, total: valid.length }),
+          { queueOnFail: true, label: `Upload “${f.name}” → ${patient.name}` }
         )
-        uploaded++
+        if (res?._queued) {
+          queued++
+          patchDetail?.((prev) => ({ ...prev, documents: [...(prev.documents || []), { id: `local-${Date.now()}-${i}`, name: doc.name, category, kind: 'file', mimeType: doc.mimeType, hasFile: true, _pending: true }] }))
+        } else { uploaded++ }
       }
-      if (!uploaded) return
-      toast.success(`${uploaded} document${uploaded > 1 ? 's' : ''} added`)
-      await afterDocChange()
+      if (!uploaded && !queued) return
+      if (queued) toast.success(`${queued} document${queued > 1 ? 's' : ''} saved offline — will upload when you reconnect`)
+      if (uploaded) { toast.success(`${uploaded} document${uploaded > 1 ? 's' : ''} added`); await afterDocChange() }
     } catch (e) { toast.error(e.message) } finally { setBusy(false); setUploadProgress(null) }
   }
 
@@ -1793,9 +1664,14 @@ function PatientDetail({ patient, onBack, refresh, onDelete, patchDetail }) {
   const addPhotoDoc = async (doc) => {
     setBusy(true)
     try {
-      await uploadDocument(patient.id, doc)
-      toast.success('Photo added')
-      await afterDocChange()
+      const res = await uploadDocument(patient.id, doc, undefined, { queueOnFail: true, label: `Photo → ${patient.name}` })
+      if (res?._queued) {
+        patchDetail?.((prev) => ({ ...prev, documents: [...(prev.documents || []), { id: `local-${Date.now()}`, name: doc.name || 'Photo', category: doc.category || 'other', kind: 'file', mimeType: doc.mimeType, hasFile: true, _pending: true }] }))
+        toast.success('Photo saved offline — will upload when you reconnect')
+      } else {
+        toast.success('Photo added')
+        await afterDocChange()
+      }
     } catch (e) { toast.error(e.message) } finally { setBusy(false) }
   }
 
@@ -1831,21 +1707,21 @@ function PatientDetail({ patient, onBack, refresh, onDelete, patchDetail }) {
   const saveObs = async ({ name, vitalsText, docs }) => {
     setBusy(true)
     try {
-      // Files/photos can't be queued reliably yet — require a connection for those.
-      if ((docs || []).length && !navigator.onLine) {
-        toast.error('You’re offline. Photo/file obs need a connection — text obs will still be saved offline.')
-      }
       let queued = false
       if (vitalsText) {
         const body = JSON.stringify({ documents: [{ name, category: 'vitals', kind: 'text', textContent: vitalsText }] })
-        const res = await api(`/patients/${patient.id}/documents`, { method: 'POST', body, queueOnFail: true, label: `Add obs “${name}”` })
+        const res = await api(`/patients/${patient.id}/documents`, { method: 'POST', body, queueOnFail: true, label: `Add obs “${name}” → ${patient.name}` })
         if (res?._queued) {
           queued = true
           patchDetail?.((prev) => ({ ...prev, documents: [...(prev.documents || []), { id: `local-${Date.now()}`, name, category: 'vitals', kind: 'text', textContent: vitalsText, _pending: true }] }))
         }
       }
-      if (navigator.onLine) {
-        for (const d of (docs || [])) { await uploadDocument(patient.id, d) }
+      for (const d of (docs || [])) {
+        const res = await uploadDocument(patient.id, d, undefined, { queueOnFail: true, label: `Obs photo → ${patient.name}` })
+        if (res?._queued) {
+          queued = true
+          patchDetail?.((prev) => ({ ...prev, documents: [...(prev.documents || []), { id: `local-${Date.now()}-o`, name: d.name || 'Obs photo', category: d.category || 'vitals', kind: 'file', mimeType: d.mimeType, hasFile: true, _pending: true }] }))
+        }
       }
       if (queued) {
         toast.success('Obs saved offline — will sync & re-score when you reconnect')
@@ -2108,6 +1984,69 @@ function ShiftBoard({ open, onOpenChange, patients, onOpenPatient }) {
 }
 
 /* ------------------------ Main App ------------------------ */
+function opKind(op) {
+  const p = op.path || ''
+  if (op.method === 'DELETE') return { icon: Trash2, tint: 'text-rose-600', verb: 'Delete document' }
+  if (/\/documents$/.test(p)) return { icon: FileUp, tint: 'text-teal-600', verb: 'Add document / note' }
+  if (op.method === 'PUT') return { icon: Pencil, tint: 'text-blue-600', verb: 'Update patient' }
+  return { icon: CloudUpload, tint: 'text-slate-600', verb: 'Change' }
+}
+
+function SyncQueueDialog({ open, onOpenChange, online, syncing, onSyncNow }) {
+  const [ops, setOps] = useState([])
+  const reload = useCallback(async () => { setOps(await getAllOps()) }, [])
+  useEffect(() => {
+    if (!open) return
+    reload()
+    const unsub = subscribeQueue(reload)
+    return () => unsub()
+  }, [open, reload])
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><CloudUpload className="h-5 w-5 text-primary" /> Waiting to sync</DialogTitle>
+          <DialogDescription>
+            {ops.length ? `${ops.length} change${ops.length > 1 ? 's' : ''} saved on this device. They upload automatically when you’re back online.` : 'Nothing waiting — everything is synced.'}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="max-h-72 space-y-2 overflow-y-auto">
+          {ops.length === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-2 py-8 text-center text-sm text-muted-foreground">
+              <CheckCircle2 className="h-8 w-8 text-emerald-500" /> All changes are synced.
+            </div>
+          ) : ops.map((op) => {
+            const k = opKind(op)
+            const Icon = k.icon
+            return (
+              <div key={op.id} className="flex items-start gap-3 rounded-lg border bg-card p-2.5">
+                <div className="mt-0.5"><Icon className={`h-4 w-4 ${k.tint}`} /></div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-foreground">{op.label || k.verb}</p>
+                  <p className="text-[11px] text-muted-foreground flex items-center gap-1"><Clock className="h-3 w-3" /> {timeAgo(op.ts) || 'just now'}</p>
+                </div>
+                <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" aria-label="Discard change" onClick={async () => { await removeOp(op.id); reload() }}>
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            )
+          })}
+        </div>
+        <DialogFooter className="gap-2 sm:justify-between">
+          {ops.length > 0 ? (
+            <Button variant="ghost" size="sm" className="text-rose-600 hover:text-rose-700" onClick={async () => { await clearQueue(); reload() }}>Discard all</Button>
+          ) : <span />}
+          <Button size="sm" className="gap-2" disabled={!online || syncing || ops.length === 0} onClick={onSyncNow}>
+            {syncing ? <RefreshCw className="h-4 w-4 animate-spin" /> : <CloudUpload className="h-4 w-4" />}
+            {online ? (syncing ? 'Syncing…' : 'Sync now') : 'Offline'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+
 function App() {
   const [patients, setPatients] = useState([])
   const [loading, setLoading] = useState(true)
@@ -2164,6 +2103,7 @@ function App() {
   const [detail, setDetail] = useState(null) // full patient for detail view
   const [pending, setPending] = useState(0) // queued offline mutations awaiting sync
   const [syncing, setSyncing] = useState(false)
+  const [queueOpen, setQueueOpen] = useState(false)
   const patchDetail = useCallback((patch) => {
     setDetail((prev) => {
       if (!prev) return prev
@@ -2462,15 +2402,20 @@ function App() {
           {syncing ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <CloudUpload className="h-3.5 w-3.5" />}
           {syncing ? 'Syncing your offline changes…' : `${pending} offline change${pending > 1 ? 's' : ''} waiting to sync`}
           {!syncing && (
-            <button onClick={() => runSync()} className="ml-1 rounded bg-white/20 px-2 py-0.5 font-semibold hover:bg-white/30">Sync now</button>
+            <>
+              <button onClick={() => runSync()} className="ml-1 rounded bg-white/20 px-2 py-0.5 font-semibold hover:bg-white/30">Sync now</button>
+              <button onClick={() => setQueueOpen(true)} className="rounded bg-white/20 px-2 py-0.5 font-semibold hover:bg-white/30">View</button>
+            </>
           )}
         </div>
       )}
       {!online && pending > 0 && (
-        <div className="flex items-center justify-center gap-2 bg-amber-600 px-4 py-1 text-center text-[11px] font-medium text-white">
-          <CloudUpload className="h-3 w-3" /> {pending} change{pending > 1 ? 's' : ''} saved on this device — will sync automatically when you’re back online
-        </div>
+        <button onClick={() => setQueueOpen(true)} className="flex w-full items-center justify-center gap-2 bg-amber-600 px-4 py-1 text-center text-[11px] font-medium text-white hover:bg-amber-700">
+          <CloudUpload className="h-3 w-3" /> {pending} change{pending > 1 ? 's' : ''} saved on this device — tap to view · will sync when you’re back online
+        </button>
       )}
+
+      <SyncQueueDialog open={queueOpen} onOpenChange={setQueueOpen} online={online} syncing={syncing} onSyncNow={() => runSync()} />
 
       <main className="container py-6">
         {loading ? (

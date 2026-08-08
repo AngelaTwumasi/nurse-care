@@ -1723,3 +1723,152 @@ agent_communication:
       self-verified via Playwright + API check (handover note queued offline then synced to server).
       Awaiting user decision on whether to run the full frontend testing agent for regression.
 
+
+#====================================================================================================
+# Backend Refactor + Photo Offline Save + Queue Viewer — added this session
+#====================================================================================================
+
+backend:
+  - task: "Backend module refactor (route.js split into lib/server/{db,ai,samples,constants}.js)"
+    implemented: true
+    working: "NA"
+    file: "/app/app/api/[[...path]]/route.js, /app/lib/server/db.js, /app/lib/server/ai.js, /app/lib/server/samples.js, /app/lib/server/constants.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          REFACTOR ONLY — no behavioural changes intended. The monolithic catch-all route.js (892 lines)
+          was split: DB + GridFS helpers -> /app/lib/server/db.js (connectToMongo, getBucket, storeFile,
+          readFile, deleteFile, dataUrlToBuffer, resolveDocDataUrl); AI helpers -> /app/lib/server/ai.js
+          (callLLM, docsToParts, identifyPatients, generateNursingCare); sample presets -> 
+          /app/lib/server/samples.js (buildSamplePatient(type) — builds the full demo patient incl. the
+          CHF default + applySamplePreset for sepsis/postop); MAX_PATIENTS/LLM_MODEL -> 
+          /app/lib/server/constants.js. route.js now imports these and is 331 lines. Verified via node --check
+          + live curls (GET /patients 200, POST /sample sepsis=high & postop=low correct, DELETE 200).
+          PLEASE REGRESSION-TEST ALL backend endpoints to confirm the split introduced no regressions:
+          patients CRUD + max-10, documents upload/GridFS content/delete, /sample (all 3 presets with full
+          aiOutput schema incl. abbreviations), /ingest (multi & single + focusHint), /generate (real Gemini),
+          /worsen, /improve, handoverNote+handoverNoteAt. Do NOT delete real patients (LAITHANG/YIM/JOHNSTONE/
+          ARMSTRONG) — clean up only patients you create.
+
+frontend:
+  - task: "Photo offline save (queue file/photo uploads offline, auto-upload on reconnect)"
+    implemented: true
+    working: true
+    file: "/app/app/page.js, /app/app/offline-queue.js, /app/lib/nurse-utils.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          uploadDocument() (in nurse-utils.js) is now queue-aware: when offline (or XHR network error) and
+          meta.queueOnFail is set, the document POST (base64 dataUrl in JSON body) is stored in the IndexedDB
+          queue and replayed on reconnect. Handlers uploadFiles/addPhotoDoc/saveObs pass queueOnFail + a label
+          and apply an optimistic pending doc to the detail view. Photos taken via camera or files chosen while
+          offline now save locally and auto-upload when back online.
+
+  - task: "Offline queue viewer dialog (list pending changes with patient + time)"
+    implemented: true
+    working: true
+    file: "/app/app/page.js, /app/app/offline-queue.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Added SyncQueueDialog: opens from the offline/pending banners (offline amber banner is tappable; the
+          online sky banner has a 'View' button). Lists each queued op with an icon, its label (e.g.
+          'Save handover note', 'Upload "x.jpg" -> YIM, SOLNAE'), and a relative time. Supports per-item discard
+          (X), 'Discard all' (clearQueue), and 'Sync now' (disabled while offline). offline-queue.js gained
+          clearQueue(). Self-verified via Playwright: offline note -> banner -> dialog shows the queued item ->
+          reconnect -> queue flushes and banner clears.
+
+  - task: "Frontend helper extraction (page.js -> lib/nurse-utils.js)"
+    implemented: true
+    working: true
+    file: "/app/app/page.js, /app/lib/nurse-utils.js"
+    stuck_count: 0
+    priority: "low"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          REFACTOR ONLY — moved pure client helpers/constants (HERO_IMG, CATEGORIES, MAX_PATIENTS, api,
+          fileToDataUrl, resizeImageDataUrl, fileToDoc, uploadDocument, timeAgo, isStale, parseClock, dueStatus)
+          out of page.js into /app/lib/nurse-utils.js and import them back. page.js 2762 -> 2610 lines. Dashboard
+          verified rendering correctly via screenshot after the change (cards, risk badges, sort intact).
+
+metadata:
+  refactor_backup: "/tmp/route.js.bak, /tmp/page.js.bak (pre-refactor copies)"
+
+test_plan:
+  current_focus:
+    - "Backend module refactor (route.js split into lib/server/*) — full endpoint regression"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      This session added: Offline Data Sync, Photo Offline Save, an Offline Queue Viewer, and a code refactor
+      (backend route.js split into lib/server/*; frontend helpers into lib/nurse-utils.js). The refactor is the
+      main risk. Please run a FULL BACKEND regression across every endpoint to confirm no behavioural change.
+      Frontend offline features were self-verified by main; a frontend regression will follow separately.
+
+
+    -agent: "testing"
+    -message: |
+      ✅ FULL BACKEND REGRESSION COMPLETE - ALL 21 TESTS PASSED - NO REGRESSIONS DETECTED
+      
+      Comprehensive backend testing completed after refactor (route.js split into lib/server/* modules).
+      Tested ALL endpoints to confirm NO behavioral changes from the modular split.
+      
+      Test Coverage (21/21 PASS):
+      1. ✅ GET /api/patients - returns array, documents stripped of dataUrl
+      2. ✅ POST /api/patients - validation (missing name -> 400)
+      3. ✅ POST /api/patients - creates patient with UUID
+      4. ✅ POST /api/patients - max 10 enforcement (11th -> 400 with 'max 10' and 'full' in error)
+      5. ✅ GET /api/patients/:id - retrieve patient
+      6. ✅ PUT /api/patients/:id - update fields (name/bed/age/diagnosis)
+      7. ✅ PUT /api/patients/:id - handoverNote sets handoverNoteAt timestamp, updates on subsequent PUT, leaves intact when not in body
+      8. ✅ DELETE /api/patients/:id - returns {success:true}, patient removed
+      9. ✅ POST /api/sample {type:'sepsis'} - full patient with isSample=true, UUID, documents[1], ewHistory[3], aiOutput with ALL 22 keys (patientSummary, priorities, interventions with howToMonitor, isbar 5 sections, medications with times[], medicationTimes, vitalsTimeline, careSchedule, earlyWarning, redFlags, newGradTips, safetyNotice, handoverHeader 5 subfields, criticalActions, drsabcd 8 fields, dietMobility, assessments done/todo, linesDevices, edd, recommendations, outstandingTasks, abbreviations non-empty array), riskLevel=high
+      10. ✅ POST /api/sample {type:'postop'} - riskLevel=low
+      11. ✅ POST /api/sample (no body) - CHF default, riskLevel=high
+      12. ✅ POST /api/patients/:id/documents - text note (kind:text)
+      13. ✅ POST /api/patients/:id/documents - base64 image (kind:file, GridFS) -> hasFile=true, dataUrl=null
+      14. ✅ POST /api/patients/:id/documents - large file (~1MB) -> GridFS storage, no BSON error
+      15. ✅ GET /api/patients/:id/documents/:docId/content - streams correct Content-Type and bytes
+      16. ✅ DELETE /api/patients/:id/documents/:docId - removes doc, content -> 404
+      17. ✅ POST /api/ingest - multi-patient (4 patients) -> detectedCount=4, created=4, truncated=false, each has focusHint set + documents attached
+      18. ✅ POST /api/ingest - single patient -> focusHint=null
+      19. ✅ POST /api/ingest - empty documents -> 400
+      20. ✅ POST /api/patients/:id/generate - REAL Gemini 2.5 Pro call (46.4s), full aiOutput schema present and persisted, ewHistory appended
+      21. ✅ POST /api/patients/:id/worsen - score +2 (0->8), risk escalates (low->high), trend='worsening', ewHistory grows
+      22. ✅ POST /api/patients/:id/improve - score -2 (8->0, floor 0), risk de-escalates (high->low), trend='stable' at 0, ewHistory grows
+      
+      CRITICAL VERIFICATION:
+      - All 4 REAL patients preserved: LAITHANG SILAS, YIM SOLNAE, JOHNSTONE JOHN, ARMSTRONG DENIS ✅
+      - Only test patients cleaned up ✅
+      - GridFS storage working correctly (small and large files) ✅
+      - AI generation with REAL Gemini 2.5 Pro working (46.4s response time) ✅
+      - All schema keys present in aiOutput (22 keys verified) ✅
+      - Max 10 patient enforcement working correctly ✅
+      
+      REFACTOR MODULES VERIFIED:
+      - /app/lib/server/db.js (Mongo + GridFS helpers) ✅
+      - /app/lib/server/ai.js (Gemini LLM helpers: callLLM, docsToParts, identifyPatients, generateNursingCare) ✅
+      - /app/lib/server/samples.js (buildSamplePatient + applySamplePreset for sepsis/postop/chf) ✅
+      - /app/lib/server/constants.js (MAX_PATIENTS=10, LLM_MODEL) ✅
+      - /app/app/api/[[...path]]/route.js (imports all modules correctly) ✅
+      
+      Backend refactor is PRODUCTION-READY. NO REGRESSIONS DETECTED.

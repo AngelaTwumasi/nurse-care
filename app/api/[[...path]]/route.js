@@ -184,6 +184,12 @@ async function handleRoute(request, { params }) {
             let hasFile = false
             // Store binary files in GridFS to keep the patient record small (avoids 16MB BSON limit)
             if (kind !== 'text' && d.dataUrl) {
+              // SEC-003: enforce a server-side size cap (client checks can be bypassed).
+              const b64 = String(d.dataUrl).split(',')[1] || ''
+              const approxBytes = Math.floor(b64.length * 3 / 4)
+              if (approxBytes > 30 * 1024 * 1024) {
+                return json({ error: 'File is too large (max 30MB).' }, 413)
+              }
               try {
                 hasFile = await storeFile(db, docId, id, d.dataUrl, d.mimeType)
               } catch (e) {
@@ -226,11 +232,16 @@ async function handleRoute(request, { params }) {
             if (f) { buffer = f.buffer; mime = doc?.mimeType || f.mime }
           }
           if (!buffer) return json({ error: 'File not found' }, 404)
+          // SEC-002: only serve known-safe types inline; anything else is forced to download
+          // as an opaque octet-stream so a crafted "document" cannot execute in the browser.
+          const safeMime = (mime || '').toLowerCase()
+          const inlineOk = safeMime.startsWith('image/') || safeMime === 'application/pdf'
           const res = new NextResponse(buffer, {
             status: 200,
             headers: {
-              'Content-Type': mime || 'application/octet-stream',
-              'Content-Disposition': `inline; filename="${(doc?.name || 'document').replace(/"/g, '')}"`,
+              'Content-Type': inlineOk ? safeMime : 'application/octet-stream',
+              'Content-Disposition': `${inlineOk ? 'inline' : 'attachment'}; filename="${(doc?.name || 'document').replace(/[^\w.\- ]/g, '_')}"`,
+              'X-Content-Type-Options': 'nosniff',
               'Cache-Control': 'private, max-age=3600',
             },
           })

@@ -1938,3 +1938,63 @@ agent_communication:
       - Refactor verified: /lib/nurse-utils.js exports working, /app/page.js imports correct ✅
       
       Frontend refactor is PRODUCTION-READY. NO REGRESSIONS DETECTED. All offline features working as expected.
+
+#====================================================================================================
+# Security hardening + PWA stale-cache fix — added this session
+#====================================================================================================
+
+backend:
+  - task: "SEC-002 content endpoint hardening (MIME allowlist + attachment + nosniff)"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          GET /patients/:id/documents/:docId/content now only serves image/* and application/pdf inline;
+          all other types are forced to application/octet-stream with Content-Disposition: attachment and
+          X-Content-Type-Options: nosniff. Prevents stored-XSS from a crafted text/html "document". Verified
+          via curl: image/png -> inline image/png+nosniff; text/html -> attachment octet-stream+nosniff.
+  - task: "SEC-003 server-side upload size limit"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          POST /patients/:id/documents now rejects files whose decoded base64 size exceeds 30MB with HTTP 413
+          (previously only a client-side 25MB check existed). Verified via a ~42MB payload -> 413.
+
+frontend:
+  - task: "PWA service worker network-first (fix stale-chunk blank preview)"
+    implemented: true
+    working: true
+    file: "/app/public/sw.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          User reported the preview showed blank/old after the refactor. Root cause: sw.js used cache-first for
+          /_next/ chunks; in dev/preview Next chunk names are not content-hashed, so stale chunks were served.
+          Rewrote sw.js to network-first for all GETs (navigations, /api, /_next, static) with cache only as an
+          offline fallback, and bumped CACHE to nursecare-v4 so activate purges the old stale cache. Serves 200.
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Security audit run. Fixed preview (PWA stale-chunk SW) + applied SEC-002 and SEC-003 (both self-verified
+      via curl). Remaining: SEC-001 (no authentication — launch blocker) and SEC-004 (on-device PHI purge on
+      logout) are pending a product decision on the auth approach. Not implementing auth until user confirms
+      the method (Emergent Google Auth vs email/password).
+

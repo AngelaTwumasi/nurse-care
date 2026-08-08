@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from 'uuid'
 import { NextResponse } from 'next/server'
 import { connectToMongo, storeFile, readFile, deleteFile, dataUrlToBuffer } from '@/lib/server/db'
-import { identifyPatients, generateNursingCare } from '@/lib/server/ai'
+import { identifyPatients, generateNursingCare, transcribeAudio } from '@/lib/server/ai'
 import { buildSamplePatient } from '@/lib/server/samples'
 import { MAX_PATIENTS } from '@/lib/server/constants'
 
@@ -201,6 +201,13 @@ async function handleRoute(request, { params }) {
                 return json({ error: 'Could not store the uploaded file. Please try a smaller file.' }, 500)
               }
             }
+            // Audio recordings (voice handover / dictated care plan): transcribe with Gemini so
+            // the spoken content can be read in the viewer AND fed into the care plan.
+            let transcript = null
+            const isAudio = (d.mimeType || '').toLowerCase().startsWith('audio/')
+            if (kind !== 'text' && isAudio && d.dataUrl) {
+              try { transcript = await transcribeAudio(d.dataUrl) } catch (e) { console.error('transcribeAudio', e?.message) }
+            }
             newDocs.push({
               id: docId,
               name: d.name || 'Untitled',
@@ -209,7 +216,9 @@ async function handleRoute(request, { params }) {
               mimeType: d.mimeType || null,
               dataUrl: null, // never embed big blobs in the patient document
               hasFile,
-              textContent: d.textContent || null,
+              textContent: d.textContent || transcript || null,
+              transcript,
+              transcribedAt: transcript ? new Date() : null,
               uploadedAt: new Date(),
             })
           }
@@ -239,7 +248,7 @@ async function handleRoute(request, { params }) {
           // SEC-002: only serve known-safe types inline; anything else is forced to download
           // as an opaque octet-stream so a crafted "document" cannot execute in the browser.
           const safeMime = (mime || '').toLowerCase()
-          const inlineOk = safeMime.startsWith('image/') || safeMime === 'application/pdf'
+          const inlineOk = safeMime.startsWith('image/') || safeMime.startsWith('audio/') || safeMime === 'application/pdf'
           const res = new NextResponse(buffer, {
             status: 200,
             headers: {

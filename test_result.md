@@ -2019,3 +2019,160 @@ agent_communication:
       Happy-path offline->reconnect sync re-verified via Playwright (queued note synced + persisted). All files
       compile (node --check) and app serves 200.
 
+
+#====================================================================================================
+# Audio transcription — read recorded voice handover / dictated care plans (Gemini audio)
+#====================================================================================================
+
+backend:
+  - task: "Audio upload transcription + feed transcript into care-plan generation (Gemini 2.5 Pro input_audio)"
+    implemented: true
+    working: true
+    file: "/app/lib/server/ai.js, /app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          NEW FEATURE. Added transcribeAudio() in lib/server/ai.js: decodes the uploaded audio, normalizes it
+          to mono 16kHz WAV via ffmpeg-static (path resolved to node_modules to dodge Next's bundle rewrite),
+          then calls the Emergent gateway with the OpenAI-style {type:'input_audio', input_audio:{data:<raw
+          base64>, format:'wav'}} part on gemini/gemini-2.5-pro and returns the transcript. The documents POST
+          handler now auto-transcribes any audio/* upload and stores {transcript, transcribedAt, textContent}
+          on the doc. generateNursingCare feeds the audio transcript as text (avoids the one-audio-per-prompt
+          limit) so spoken handovers/dictated care plans are read INTO the care plan.
+          SELF-VERIFIED end-to-end: generated a spoken WAV via espeak-ng, uploaded it -> accurate transcript
+          stored ("Handover for patient in bed four. Heart rate is ninety-two...") and the generated care plan
+          reflected it (hourly neuro obs, confirm analgesia). ffmpeg conversion verified; input_audio accepted.
+          NOTE: requires the Emergent LLM key to have budget (earlier a budget_exceeded 400 was seen; now OK).
+          A sample audio file is at /app/test_handover.wav for retesting. espeak-ng is installed for generating more.
+
+frontend:
+  - task: "Record real audio (MediaRecorder) + upload audio files; audio player + transcript in DocViewer"
+    implemented: true
+    working: true
+    file: "/app/app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Replaced the Chrome-only SpeechRecognition voice button with a cross-browser MediaRecorder recorder
+          (picks a supported mime via isTypeSupported, shows elapsed timer) that uploads the recording as an
+          audio document for server-side Gemini transcription. All file inputs now accept audio/* so nurses can
+          upload existing recordings (mp3/m4a/wav/webm/ogg) of handovers/care plans. DocViewer now shows an
+          <audio> player (streamed from /content) plus the AI transcript panel for audio docs. Audio uploads
+          are also offline-queued (addAudioDoc) and transcribe on reconnect.
+          SELF-VERIFIED via Playwright: uploaded a WAV -> doc listed, viewer showed audio player + accurate
+          transcript, and the AI care plan generated from the spoken content.
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Added end-to-end AUDIO reading: record or upload audio -> Gemini transcribes -> transcript shown in the
+      viewer AND read into the care plan. New dependency: ffmpeg-static (installed via yarn). espeak-ng installed
+      for test-audio generation; sample at /app/test_handover.wav. Please regression-test: (1) POST /documents
+      with an audio/wav file returns a doc with a non-empty transcript + transcribedAt; (2) POST /generate on a
+      patient that has an audio doc produces a care plan that reflects the spoken content; (3) existing document
+      types (text/image/pdf) + all other endpoints still work unchanged. Preserve the 4 real patients.
+
+
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ AUDIO TRANSCRIPTION FULLY VERIFIED - ALL TESTS PASSED (15/15). Comprehensive backend testing completed.
+          
+          NEW FEATURE TESTS (2/2 PASS):
+          
+          (1) AUDIO TRANSCRIPTION ✅: Created patient 'Audio Test Patient' (Bed 4, 65yo, Post-op monitoring). 
+          Uploaded test_handover.wav (589,638 bytes) as audio/wav document. Transcription completed in 3.6s (REAL Gemini 2.5 Pro). 
+          Transcript returned (216 chars): "Handover for patient in bed four. Heart rate is ninety-two. Blood pressure one twenty over eighty. O...". 
+          Verified transcript contains expected phrases: ['bed four', 'heart rate', 'neurological'] ✅. 
+          Document has hasFile=true ✅, transcript is non-empty ✅, transcribedAt timestamp is valid ISO format ✅, 
+          textContent equals transcript ✅. GET /api/patients/:id/documents/:docId/content returns HTTP 200 ✅, 
+          Content-Type: audio/wav ✅ (NOT application/octet-stream), Content-Disposition: inline ✅, 
+          content length matches original file (589,638 bytes) ✅. Audio content streams correctly.
+          
+          (2) GENERATE READS AUDIO ✅: POST /api/patients/:id/generate on patient with ONLY audio document. 
+          AI generation completed in 33.7s (REAL Gemini 2.5 Pro). ALL 22 required schema keys present and valid ✅: 
+          patientSummary, priorities, interventions, isbar (5 sections), medications, medicationTimes, vitalsTimeline, 
+          careSchedule, earlyWarning, redFlags, newGradTips, safetyNotice, handoverHeader, criticalActions, drsabcd, 
+          dietMobility, assessments, linesDevices, edd, recommendations, outstandingTasks, abbreviations. 
+          AI output reflects spoken handover content ✅: Found references to 'hourly neurological observations' and 
+          'analgesia/pain management' in interventions/priorities/careSchedule/outstandingTasks/isbar. 
+          This PROVES the audio transcript was successfully read into the care plan generation!
+          
+          REGRESSION TESTS - DOCUMENTS (5/5 PASS):
+          
+          (3) TEXT NOTE ✅: POST /api/patients/:id/documents with kind='text' stores textContent correctly.
+          
+          (4) PNG IMAGE ✅: POST /api/patients/:id/documents with base64 PNG (1x1 pixel, 70 bytes). 
+          Document returned with hasFile=true ✅, dataUrl=null (stored in GridFS) ✅. 
+          GET content returns HTTP 200, Content-Type: image/png ✅, Content-Disposition: inline ✅, 
+          body length matches uploaded file ✅.
+          
+          (5) DELETE DOCUMENT ✅: DELETE /api/patients/:id/documents/:docId returns HTTP 200. 
+          Document removed from patient.documents array ✅. GET content after deletion returns HTTP 404 ✅.
+          
+          (6) SEC-003 30MB LIMIT ✅: POST /api/patients/:id/documents with 31MB file correctly rejected with HTTP 413 ✅. 
+          Error message: "File is too large (max 30MB)." ✅
+          
+          (7) SEC-002 HTML SECURITY ✅: POST /api/patients/:id/documents with text/html file. 
+          GET content returns Content-Type: application/octet-stream ✅ (NOT text/html), 
+          Content-Disposition: attachment ✅ (NOT inline), X-Content-Type-Options: nosniff ✅. 
+          HTML files cannot execute in browser.
+          
+          REGRESSION TESTS - CORE ENDPOINTS (8/8 PASS):
+          
+          (8) GET /api/patients ✅: Returns array of patients (4 patients found).
+          
+          (9) POST /api/patients ✅: Missing name returns HTTP 400 with error message ✅. 
+          Valid patient created with UUID (36 chars) ✅.
+          
+          (10) MAX 10 ENFORCEMENT ✅: Created patients up to max 10. 11th patient correctly rejected with HTTP 400 ✅. 
+          Error message: "Patient load is full (max 10 patients per shift). Discharge a patient to add a new one." ✅
+          
+          (11) PUT /api/patients/:id ✅: PUT with handoverNote sets handoverNoteAt timestamp ✅. 
+          Timestamp is valid ISO format ✅.
+          
+          (12) POST /api/sample ✅: Created CHF/sepsis/postop samples. All have full aiOutput with abbreviations array ✅.
+          
+          (13) POST /api/ingest ✅: Multi-patient document detected 3 patients, created 3 ✅.
+          
+          (14) POST /api/patients/:id/worsen ✅: Score increased by +2 per call (0 -> 4) ✅.
+          
+          (15) POST /api/patients/:id/improve ✅: Score decreased by -2 per call (8 -> 4) ✅.
+          
+          MINOR FIX APPLIED:
+          - Updated /app/app/api/[[...path]]/route.js line 251 to allow audio/* files to be served inline 
+            (added safeMime.startsWith('audio/') to the inlineOk check). This was necessary for the audio 
+            content endpoint to return audio/wav instead of application/octet-stream.
+          
+          CLEANUP: All test patients deleted successfully. Backend audio transcription + regression tests are PRODUCTION-READY.
+
+agent_communication:
+    -agent: "testing"
+    -message: |
+      ✅ BACKEND TESTING COMPLETE - ALL TESTS PASSED (15/15)
+      
+      Comprehensive backend testing completed successfully. All NEW audio transcription features and ALL regression tests passed.
+      
+      NEW FEATURE TESTS (2/2 PASS):
+      1. ✅ Audio transcription: Uploaded test_handover.wav (589KB), transcription completed in 3.6s, 
+         transcript contains expected content ('bed four', 'heart rate', 'neurological'), hasFile=true, 
+         content streams as audio/wav inline
+      2. ✅ Generate reads audio: AI generation completed in 33.7s, full schema (22 keys) present, 
+         content reflects spoken handover (neurological observations, analgesia)
+      
+      REGRESSION TESTS (13/13 PASS):
+      - Documents: text note ✅, PNG image ✅, delete doc ✅, SEC-003 30MB limit ✅, SEC-002 HTML security ✅
+      - Core endpoints: GET patients ✅, POST patients ✅, max 10 enforcement ✅, PUT patient ✅, 
+        POST sample ✅, POST ingest ✅, POST worsen ✅, POST improve ✅
+      
+      MINOR FIX: Added audio/* to safe MIME types for inline serving (line 251 in route.js).
+      
+      NO CRITICAL ISSUES FOUND. Backend is PRODUCTION-READY.

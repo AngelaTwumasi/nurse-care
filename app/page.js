@@ -190,7 +190,7 @@ function PatientForm({ onAdd, reload, onSuccess, submitLabel = 'Add patient' }) 
         <label className="flex cursor-pointer items-center gap-2 rounded-md border border-dashed p-2.5 text-sm transition-colors hover:bg-accent/50">
           <FileUp className="h-4 w-4 shrink-0 text-primary" />
           <span className="truncate">{files.length ? `${files.length} file${files.length > 1 ? 's' : ''} selected` : 'Choose PDF or image to upload'}</span>
-          <input type="file" multiple accept="application/pdf,image/*" className="hidden" onChange={(e) => setFiles(Array.from(e.target.files || []))} />
+          <input type="file" multiple accept="application/pdf,image/*,audio/*" className="hidden" onChange={(e) => setFiles(Array.from(e.target.files || []))} />
         </label>
       </div>
       <div className="flex justify-end pt-1">
@@ -309,7 +309,7 @@ function LandingUpload({ onSubmit }) {
         <FileUp className="h-6 w-6 text-primary" />
         <span className="text-sm font-medium">Choose files to upload</span>
         <span className="text-xs text-muted-foreground">PDF, JPG or PNG · multiple allowed</span>
-        <input type="file" multiple accept="application/pdf,image/*" className="hidden" onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} />
+        <input type="file" multiple accept="application/pdf,image/*,audio/*" className="hidden" onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} />
       </label>
 
       <CameraCapture category={category} onCapture={(doc) => setDocs((prev) => [...prev, doc])} />
@@ -476,40 +476,60 @@ function PatientCard({ patient, index, onOpen, onPopulate, onWorsen, onImprove, 
 }
 
 /* ------------------------ Upload Panel ------------------------ */
-function VoiceHandoverButton({ onTranscript, disabled }) {
+function VoiceHandoverButton({ onAudio, disabled, label = 'Voice handover' }) {
   const [recording, setRecording] = useState(false)
+  const [elapsed, setElapsed] = useState(0)
   const recRef = useRef(null)
-  const textRef = useRef('')
-  const toggle = () => {
-    const SR = typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition)
-    if (!SR) { toast.error('Voice input isn’t supported in this browser. Try Chrome, or type/paste the note.'); return }
-    if (recording) { try { recRef.current?.stop() } catch {}; return }
-    const rec = new SR()
-    rec.lang = 'en-AU'; rec.continuous = true; rec.interimResults = true
-    textRef.current = ''
-    rec.onresult = (e) => {
-      let t = ''
-      for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript + ' '
-      textRef.current = t
-    }
-    rec.onerror = (e) => { if (e.error !== 'no-speech') toast.error('Voice capture error'); setRecording(false) }
-    rec.onend = () => {
-      setRecording(false)
-      const t = textRef.current.trim()
-      if (t) onTranscript(t)
-      else toast.error('Didn’t catch that — please try again')
-    }
-    recRef.current = rec
-    try { rec.start(); setRecording(true); toast('Recording handover… tap again to stop', { duration: 2500 }) } catch { toast.error('Could not start recording') }
+  const chunksRef = useRef([])
+  const timerRef = useRef(null)
+  const pickMime = () => {
+    const cands = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4', 'audio/mpeg']
+    for (const m of cands) { try { if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(m)) return m } catch {} }
+    return ''
   }
+  const start = async () => {
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      toast.error('Recording isn’t supported in this browser. Try uploading an audio file instead.')
+      return
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mime = pickMime()
+      const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined)
+      chunksRef.current = []
+      rec.ondataavailable = (e) => { if (e.data && e.data.size) chunksRef.current.push(e.data) }
+      rec.onstop = async () => {
+        clearInterval(timerRef.current); setElapsed(0)
+        stream.getTracks().forEach((t) => t.stop())
+        const type = rec.mimeType || mime || 'audio/webm'
+        const blob = new Blob(chunksRef.current, { type })
+        if (!blob.size) { toast.error('No audio captured — please try again'); return }
+        const dataUrl = await new Promise((res) => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(blob) })
+        const ext = type.includes('mp4') || type.includes('mpeg') ? 'm4a' : type.includes('ogg') ? 'ogg' : 'webm'
+        const stamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        onAudio && onAudio({ name: `${label} ${stamp}.${ext}`, mimeType: type, kind: 'file', dataUrl })
+      }
+      recRef.current = rec
+      rec.start()
+      setRecording(true)
+      setElapsed(0)
+      timerRef.current = setInterval(() => setElapsed((e) => e + 1), 1000)
+      toast('Recording… tap again to stop &amp; transcribe', { duration: 2500 })
+    } catch (e) {
+      toast.error('Microphone permission denied or unavailable')
+    }
+  }
+  const stop = () => { try { recRef.current?.stop() } catch {}; setRecording(false) }
+  const mm = String(Math.floor(elapsed / 60)).padStart(2, '0')
+  const ss = String(elapsed % 60).padStart(2, '0')
   return (
-    <Button type="button" variant="outline" className={`w-full gap-2 ${recording ? 'border-red-400 text-red-600' : ''}`} onClick={toggle} disabled={disabled}>
-      {recording ? <><span className="h-2 w-2 animate-pulse rounded-full bg-red-500" /> Stop &amp; save handover</> : <><Mic className="h-4 w-4 text-primary" /> Record voice handover</>}
+    <Button type="button" variant="outline" className={`w-full gap-2 ${recording ? 'border-red-400 text-red-600' : ''}`} onClick={recording ? stop : start} disabled={disabled}>
+      {recording ? <><span className="h-2 w-2 animate-pulse rounded-full bg-red-500" /> Stop &amp; save · {mm}:{ss}</> : <><Mic className="h-4 w-4 text-primary" /> Record voice handover</>}
     </Button>
   )
 }
 
-function UploadPanel({ onUploadFiles, onAddNote, onAddDoc, onVoiceHandover, busy, progress }) {
+function UploadPanel({ onUploadFiles, onAddNote, onAddDoc, onAudioDoc, busy, progress }) {
   const [category, setCategory] = useState('careplan')
   const [note, setNote] = useState('')
   const [noteName, setNoteName] = useState('')
@@ -549,15 +569,15 @@ function UploadPanel({ onUploadFiles, onAddNote, onAddDoc, onVoiceHandover, busy
         <label className={`flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-border p-6 text-center transition-colors hover:bg-accent/50 ${busy ? 'pointer-events-none opacity-60' : 'cursor-pointer'}`}>
           <FileUp className="h-7 w-7 text-primary" />
           <span className="text-sm font-medium">Click to upload files</span>
-          <span className="text-xs text-muted-foreground">PDF, JPG or PNG · multiple allowed</span>
-          <input type="file" multiple accept="application/pdf,image/*" className="hidden" onChange={handleFiles} disabled={busy} />
+          <span className="text-xs text-muted-foreground">PDF, image or audio recording · multiple allowed</span>
+          <input type="file" multiple accept="application/pdf,image/*,audio/*" className="hidden" onChange={handleFiles} disabled={busy} />
         </label>
 
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <CameraCapture category={category} onCapture={(doc) => onAddDoc && onAddDoc({ ...doc, category })} />
-          <VoiceHandoverButton disabled={busy} onTranscript={(t) => onVoiceHandover && onVoiceHandover(t)} />
+          <VoiceHandoverButton disabled={busy} onAudio={(doc) => onAudioDoc && onAudioDoc({ ...doc, category: category === 'careplan' ? 'handover' : category })} />
         </div>
-        <p className="text-[11px] text-muted-foreground">Take a photo of a chart/monitor, or record a spoken handover — NurseCare transcribes it and populates the care plan.</p>
+        <p className="text-[11px] text-muted-foreground">Take a photo of a chart/monitor, upload a recorded handover/care plan, or record a spoken handover — NurseCare transcribes the audio and reads it into the care plan.</p>
 
         {progress && (
           <div className="space-y-1.5 rounded-lg border bg-accent/40 p-3">
@@ -628,9 +648,29 @@ function DocViewer({ open, onOpenChange, documents, currentIndex, setCurrentInde
   const cat = CATEGORIES[d.category] || CATEGORIES.other
   const Icon = cat.icon
   const contentUrl = d.dataUrl || (patientId ? `/api/patients/${patientId}/documents/${d.id}/content` : null)
+  const isAudio = (d.mimeType && d.mimeType.startsWith('audio/')) || d.kind === 'audio'
   let preview
   if (d.kind === 'text') {
     preview = <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap rounded-lg border bg-muted/40 p-4 text-sm leading-relaxed">{d.textContent || '(empty note)'}</pre>
+  } else if (isAudio) {
+    preview = (
+      <div className="space-y-3">
+        <div className="rounded-lg border bg-muted/30 p-4">
+          <div className="mb-2 flex items-center gap-2 text-sm font-medium"><Mic className="h-4 w-4 text-primary" /> Recording</div>
+          {contentUrl ? <audio controls preload="none" src={contentUrl} className="w-full" /> : <p className="text-xs text-muted-foreground">Audio will be available once uploaded.</p>}
+        </div>
+        <div className="rounded-lg border bg-card p-4">
+          <div className="mb-2 flex items-center gap-2 text-sm font-semibold"><FileText className="h-4 w-4 text-teal-600" /> AI transcript</div>
+          {d.transcript || d.textContent ? (
+            <pre className="max-h-[40vh] overflow-auto whitespace-pre-wrap text-sm leading-relaxed text-foreground">{d.transcript || d.textContent}</pre>
+          ) : d._pending ? (
+            <p className="text-xs text-muted-foreground">Will transcribe automatically when you reconnect.</p>
+          ) : (
+            <p className="text-xs text-muted-foreground">No transcript yet — regenerate the care plan, or the recording may have been silent/unclear.</p>
+          )}
+        </div>
+      </div>
+    )
   } else if (d.mimeType && d.mimeType.startsWith('image/')) {
     preview = <div className="flex max-h-[60vh] items-center justify-center overflow-auto rounded-lg border bg-muted/30 p-2"><img src={contentUrl} alt={d.name} className="max-h-[58vh] w-auto rounded" /></div>
   } else if (d.mimeType === 'application/pdf') {
@@ -1490,7 +1530,7 @@ function NewObsDialog({ onSave }) {
         <div className="flex gap-2">
           <label className="flex flex-1 cursor-pointer items-center justify-center gap-2 rounded-md border border-dashed p-2 text-sm hover:bg-accent/50">
             <FileUp className="h-4 w-4 text-primary" /> Choose file
-            <input type="file" multiple accept="application/pdf,image/*" className="hidden" onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} />
+            <input type="file" multiple accept="application/pdf,image/*,audio/*" className="hidden" onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} />
           </label>
           <CameraCapture category="vitals" onCapture={(doc) => setDocs((prev) => [...prev, doc])} />
         </div>
@@ -1675,14 +1715,17 @@ function PatientDetail({ patient, onBack, refresh, onDelete, patchDetail }) {
     } catch (e) { toast.error(e.message) } finally { setBusy(false) }
   }
 
-  const voiceHandover = async (transcript) => {
+  const addAudioDoc = async (doc) => {
     setBusy(true)
     try {
-      const name = `Voice handover ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
-      await api(`/patients/${patient.id}/documents`, { method: 'POST', body: JSON.stringify({ documents: [{ name, category: 'other', kind: 'text', textContent: transcript }] }) })
-      toast.success('Handover captured — populating care plan')
-      await refresh()
-      await generate(true)
+      const res = await uploadDocument(patient.id, doc, undefined, { queueOnFail: true, label: `${doc.name || 'Voice recording'} → ${patient.name}` })
+      if (res?._queued) {
+        patchDetail?.((prev) => ({ ...prev, documents: [...(prev.documents || []), { id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, name: doc.name || 'Voice recording', category: doc.category || 'handover', kind: 'file', mimeType: doc.mimeType, hasFile: true, _pending: true }] }))
+        toast.success('Recording saved offline — will upload &amp; transcribe when you reconnect')
+      } else {
+        toast.success('Recording added — transcribing &amp; reading it into the care plan')
+        await afterDocChange()
+      }
     } catch (e) { toast.error(e.message) } finally { setBusy(false) }
   }
 
@@ -1762,9 +1805,9 @@ function PatientDetail({ patient, onBack, refresh, onDelete, patchDetail }) {
   return (
     <div className="space-y-5">
       <DocViewer open={viewerOpen} onOpenChange={setViewerOpen} documents={patient.documents || []} currentIndex={viewIndex} setCurrentIndex={setViewIndex} patientId={patient.id} />
-      <div className="flex items-center justify-between">
-        <Button variant="ghost" onClick={onBack} className="gap-2 -ml-2"><ArrowLeft className="h-4 w-4" /> Back to shift</Button>
-        <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Button variant="ghost" onClick={onBack} className="gap-2 -ml-2 shrink-0"><ArrowLeft className="h-4 w-4" /> Back to shift</Button>
+        <div className="flex items-center gap-2 shrink-0">
           <NewObsDialog onSave={saveObs} />
           <AlertDialog>
             <AlertDialogTrigger asChild>
@@ -1806,7 +1849,7 @@ function PatientDetail({ patient, onBack, refresh, onDelete, patchDetail }) {
       <div className="grid gap-5 lg:grid-cols-5">
         {/* Left: docs */}
         <div className="space-y-4 lg:col-span-2">
-          <UploadPanel onUploadFiles={uploadFiles} onAddNote={addNote} onAddDoc={addPhotoDoc} onVoiceHandover={voiceHandover} busy={busy} progress={uploadProgress} />
+          <UploadPanel onUploadFiles={uploadFiles} onAddNote={addNote} onAddDoc={addPhotoDoc} onAudioDoc={addAudioDoc} busy={busy} progress={uploadProgress} />
           <div>
             <h3 className="mb-2 text-sm font-semibold text-muted-foreground">Uploaded documents ({patient.documents?.length || 0})</h3>
             <DocumentList documents={patient.documents} onDelete={deleteDoc} onOpen={openDoc} />

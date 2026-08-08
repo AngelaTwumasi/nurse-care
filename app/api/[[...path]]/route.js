@@ -111,6 +111,10 @@ async function handleRoute(request, { params }) {
           const kind = doc.kind || (doc.textContent ? 'text' : 'file')
           let hasFile = false
           if (kind !== 'text' && doc.dataUrl) {
+            const _b64 = String(doc.dataUrl).split(',')[1] || ''
+            if (Math.floor(_b64.length * 3 / 4) > 30 * 1024 * 1024) {
+              return json({ error: 'A document is too large (max 30MB).' }, 413)
+            }
             try { hasFile = await storeFile(db, docId, pid, doc.dataUrl, doc.mimeType) } catch (e) { console.error('ingest storeFile', e?.message) }
           }
           docsMeta.push({ id: docId, name: doc.name || 'Untitled', category: doc.category || 'other', kind, mimeType: doc.mimeType || null, dataUrl: null, hasFile, textContent: doc.textContent || null, uploadedAt: new Date() })

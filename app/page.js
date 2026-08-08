@@ -29,7 +29,7 @@ import {
   Dumbbell, Apple, UserRound, CalendarClock, GripVertical, Users, ArrowDownWideNarrow, Printer, Search, Camera, WifiOff, Pencil, Mic,
   RefreshCw, CloudUpload,
 } from 'lucide-react'
-import { enqueueOp, flushQueue, queueCount, subscribeQueue, getAllOps, removeOp, clearQueue } from './offline-queue'
+import { flushQueue, queueCount, subscribeQueue, getAllOps, removeOp, clearQueue } from './offline-queue'
 import { Switch } from '@/components/ui/switch'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Progress } from '@/components/ui/progress'
@@ -1652,7 +1652,7 @@ function PatientDetail({ patient, onBack, refresh, onDelete, patchDetail }) {
       const body = JSON.stringify({ documents: [{ name, category, kind: 'text', textContent }] })
       const res = await api(`/patients/${patient.id}/documents`, { method: 'POST', body, queueOnFail: true, label: `Add note “${name}”` })
       if (res?._queued) {
-        patchDetail?.((prev) => ({ ...prev, documents: [...(prev.documents || []), { id: `local-${Date.now()}`, name, category, kind: 'text', textContent, _pending: true }] }))
+        patchDetail?.((prev) => ({ ...prev, documents: [...(prev.documents || []), { id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, name, category, kind: 'text', textContent, _pending: true }] }))
         toast.success('Saved offline — will sync when you reconnect')
       } else {
         toast.success('Note saved')
@@ -1666,7 +1666,7 @@ function PatientDetail({ patient, onBack, refresh, onDelete, patchDetail }) {
     try {
       const res = await uploadDocument(patient.id, doc, undefined, { queueOnFail: true, label: `Photo → ${patient.name}` })
       if (res?._queued) {
-        patchDetail?.((prev) => ({ ...prev, documents: [...(prev.documents || []), { id: `local-${Date.now()}`, name: doc.name || 'Photo', category: doc.category || 'other', kind: 'file', mimeType: doc.mimeType, hasFile: true, _pending: true }] }))
+        patchDetail?.((prev) => ({ ...prev, documents: [...(prev.documents || []), { id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, name: doc.name || 'Photo', category: doc.category || 'other', kind: 'file', mimeType: doc.mimeType, hasFile: true, _pending: true }] }))
         toast.success('Photo saved offline — will upload when you reconnect')
       } else {
         toast.success('Photo added')
@@ -1713,7 +1713,7 @@ function PatientDetail({ patient, onBack, refresh, onDelete, patchDetail }) {
         const res = await api(`/patients/${patient.id}/documents`, { method: 'POST', body, queueOnFail: true, label: `Add obs “${name}” → ${patient.name}` })
         if (res?._queued) {
           queued = true
-          patchDetail?.((prev) => ({ ...prev, documents: [...(prev.documents || []), { id: `local-${Date.now()}`, name, category: 'vitals', kind: 'text', textContent: vitalsText, _pending: true }] }))
+          patchDetail?.((prev) => ({ ...prev, documents: [...(prev.documents || []), { id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, name, category: 'vitals', kind: 'text', textContent: vitalsText, _pending: true }] }))
         }
       }
       for (const d of (docs || [])) {
@@ -2121,17 +2121,6 @@ function App() {
   const saveOrder = (list) => {
     try { localStorage.setItem('nursecare_order', JSON.stringify(list.map((p) => p.id))) } catch {}
   }
-  const applyOrder = (list) => {
-    try {
-      const saved = JSON.parse(localStorage.getItem('nursecare_order') || '[]')
-      if (!saved.length) return list
-      const map = Object.fromEntries(list.map((p) => [p.id, p]))
-      const ordered = saved.map((id) => map[id]).filter(Boolean)
-      const rest = list.filter((p) => !saved.includes(p.id))
-      return [...ordered, ...rest]
-    } catch { return list }
-  }
-
   const rankRisk = (p) => { const r = p.aiOutput?.earlyWarning?.riskLevel; return r === 'high' ? 3 : r === 'medium' ? 2 : r === 'low' ? 1 : 0 }
   const sortByRiskList = (list) => [...list].sort((a, b) => rankRisk(b) - rankRisk(a))
   const applyManualOrder = (list) => {
@@ -2184,20 +2173,34 @@ function App() {
     try { setPending(await queueCount()) } catch {}
   }, [])
 
+  const syncingRef = useRef(false)
   const runSync = useCallback(async () => {
     if (typeof navigator !== 'undefined' && !navigator.onLine) return
+    if (syncingRef.current) return // in-flight guard: never run two flushes at once (avoids dup writes)
     const before = await queueCount()
     if (!before) { setPending(0); return }
+    syncingRef.current = true
     setSyncing(true)
     try {
-      const done = await flushQueue()
+      const { done, failed, failedLabels } = await flushQueue()
       await refreshPending()
-      if (done > 0) {
-        toast.success(`Synced ${done} offline change${done > 1 ? 's' : ''}`)
+      if (done > 0 || failed > 0) {
         await load()
         if (selectedIdRef.current) await loadDetail(selectedIdRef.current)
       }
-    } catch (e) { /* will retry on next reconnect */ } finally { setSyncing(false) }
+      if (done > 0) {
+        toast.success(`Synced ${done} offline change${done > 1 ? 's' : ''}`)
+      }
+      if (failed > 0) {
+        toast.error(
+          `${failed} offline change${failed > 1 ? 's' : ''} couldn't be saved${failedLabels[0] ? ` (e.g. ${failedLabels[0]})` : ''}. Please re-enter and try again.`,
+          { duration: 8000 }
+        )
+      }
+    } catch (e) { /* will retry on next reconnect */ } finally {
+      syncingRef.current = false
+      setSyncing(false)
+    }
   }, [load, loadDetail, refreshPending])
 
   const selectedIdRef = useRef(null)

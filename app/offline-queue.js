@@ -90,30 +90,44 @@ export async function queueCount() {
 }
 
 // Replay queued operations in order. Stops on network failure or server (5xx)
-// error so it can retry later; drops client-error (4xx) ops that will never succeed.
-// Returns number of successfully flushed ops.
+// error so it can retry later; permanent client errors (4xx) are dropped but reported
+// as FAILED (not success). Returns { done, failed, failedLabels }.
+let _flushing = false
 export async function flushQueue() {
-  if (typeof navigator !== 'undefined' && !navigator.onLine) return 0
+  if (_flushing) return { done: 0, failed: 0, failedLabels: [] }
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return { done: 0, failed: 0, failedLabels: [] }
+  _flushing = true
   const ops = await getAllOps()
-  let done = 0
-  for (const op of ops) {
-    if (typeof navigator !== 'undefined' && !navigator.onLine) break
-    try {
-      const res = await fetch(`/api${op.path}`, {
-        method: op.method,
-        headers: { 'Content-Type': 'application/json' },
-        body: op.body || undefined,
-      })
-      if (res.status >= 500) break // transient server issue — retry later
-      // success (2xx) or permanent client error (4xx): drop the op
-      await removeOp(op.id)
-      done++
-    } catch (e) {
-      // network error — likely went offline again; stop and retry later
-      break
+  let done = 0, failed = 0
+  const failedLabels = []
+  try {
+    for (const op of ops) {
+      if (typeof navigator !== 'undefined' && !navigator.onLine) break
+      try {
+        const res = await fetch(`/api${op.path}`, {
+          method: op.method,
+          headers: { 'Content-Type': 'application/json' },
+          body: op.body || undefined,
+        })
+        if (res.status >= 500) break // transient server issue — retry later
+        if (res.ok) {
+          await removeOp(op.id)
+          done++
+        } else {
+          // Permanent client error (4xx): drop so it doesn't loop forever, but report as failed.
+          await removeOp(op.id)
+          failed++
+          failedLabels.push(op.label || `${op.method} ${op.path}`)
+        }
+      } catch (e) {
+        // network error — likely went offline again; stop and retry later
+        break
+      }
     }
+  } finally {
+    _flushing = false
   }
-  return done
+  return { done, failed, failedLabels }
 }
 
 export function subscribeQueue(cb) {

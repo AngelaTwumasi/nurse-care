@@ -1998,3 +1998,24 @@ agent_communication:
       logout) are pending a product decision on the auth approach. Not implementing auth until user confirms
       the method (Emergent Google Auth vs email/password).
 
+
+#====================================================================================================
+# Code review fixes — offline sync hardening
+#====================================================================================================
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Ran functional code review; fixed the issues it raised in the offline-sync layer:
+      - HIGH (data integrity): flushQueue now returns {done, failed, failedLabels}. A queued write that
+        replays with a 4xx is counted as FAILED (dropped so it can't loop) and surfaced via a distinct
+        error toast ("N offline change(s) couldn't be saved… Please re-enter and try again") instead of
+        being falsely reported as "Synced". 5xx/network still break to retry later. File: app/offline-queue.js.
+      - MEDIUM (dup writes): runSync now has an in-flight guard (syncingRef) AND flushQueue has a module-level
+        _flushing lock, so the 'online' event + mount effect can't run two concurrent flushes. File: app/page.js.
+      - LOW: optimistic 'local-*' doc ids now include a random suffix (no duplicate React keys); removed unused
+        enqueueOp import and the dead applyOrder() duplicate; uploadDocument XHR now has a 120s timeout (was
+        hanging indefinitely); /ingest now enforces the same 30MB base64 upload cap as /documents.
+      Happy-path offline->reconnect sync re-verified via Playwright (queued note synced + persisted). All files
+      compile (node --check) and app serves 200.
+

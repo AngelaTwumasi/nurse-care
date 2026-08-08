@@ -127,8 +127,32 @@ RULES:
 Return ONLY a valid JSON object (no markdown, no commentary) with EXACTLY this shape:
 {
   "patientSummary": "2-3 sentence plain-language summary of the patient and current status",
+  "handoverHeader": {
+    "alerts": [ "key safety alerts, e.g. allergies, falls risk, infection precautions, resuscitation status, cognitive/communication needs — ONLY if seen in documents" ],
+    "diagnosis": "primary diagnosis / reason for admission",
+    "background": "relevant past medical history and social background",
+    "age": "patient age",
+    "attendingDoctor": "attending doctor / medical team / consultant if documented, else 'Not documented'"
+  },
+  "criticalActions": [ { "action": "a TIME-CRITICAL nursing action for this patient", "window": "the critical time window, e.g. 'now', 'within 1 hour', 'before next dose'", "rationale": "why it is time-critical" } ],
   "priorities": [ { "rank": 1, "priority": "short title", "rationale": "why this matters now", "urgency": "urgent" | "soon" | "routine" } ],
-  "interventions": [ { "intervention": "what to do", "frequency": "how often / timing", "monitoring": "what to watch for", "rationale": "why" } ],
+  "interventions": [ { "intervention": "what to do", "frequency": "how often / timing", "monitoring": "WHAT specifically to monitor (name the parameters/signs to watch)", "howToMonitor": "HOW to monitor it — the technique/tool, what a normal vs concerning result looks like, and the threshold that should prompt action", "rationale": "why this matters — the clinical reasoning, consequences if missed" } ],
+  "drsabcd": {
+    "danger": "any environmental/safety hazards to check for this patient",
+    "response": "expected level of response / how to assess (e.g. AVPU/GCS)",
+    "sendForHelp": "who/when to call for help for this patient (RN, MET, rapid response)",
+    "airway": "airway status and what to watch",
+    "breathing": "breathing status, O2, targets and what to watch",
+    "circulation": "circulation/perfusion status, IV access, fluids and what to watch",
+    "disability": "neuro/BGL/pain status and what to watch",
+    "exposure": "temperature, skin, wounds, drains and what to watch"
+  },
+  "dietMobility": { "diet": "diet order / restrictions / assistance needed", "mobility": "mobility status / weight-bearing / falls precautions", "aids": "aids or supervision needed" },
+  "assessments": { "done": [ "assessments/observations already completed this shift" ], "todo": [ "assessments still to be completed this shift" ] },
+  "linesDevices": [ { "type": "e.g. IV cannula / IDC / NGT / infusion / drain / oxygen", "detail": "what is running / size / rate", "site": "location", "notes": "care, patency, review/removal date" } ],
+  "edd": "estimated date of discharge if documented, else 'Not documented'",
+  "recommendations": [ "overall plan recommendations and next steps for the shift/team" ],
+  "outstandingTasks": [ "tasks still to complete this shift (jobs list)" ],
   "isbar": { "identify": "...", "situation": "...", "background": "...", "assessment": "...", "recommendation": "..." },
   "medications": [ { "name": "...", "dose": "...", "route": "...", "times": ["due/administration times seen or scheduled, e.g. 0800", "1400"], "notes": "timing or nursing considerations" } ],
   "medicationTimes": [ { "time": "e.g. 0800", "medication": "name", "dose": "dose" } ],
@@ -146,6 +170,7 @@ Return ONLY a valid JSON object (no markdown, no commentary) with EXACTLY this s
   "safetyNotice": "one line reminding the nurse to verify with a senior/RN"
 }
 
+For every "monitoring"/"howToMonitor" field, be SPECIFIC and practical: state exactly what extra to observe, HOW to observe it, and the number/threshold that should trigger action. For "criticalActions", list only genuinely time-critical items (leave empty [] if none). For fields not documented, use "Not documented" (strings) or [] (arrays) rather than inventing details.
 For "vitalsTimeline" and "medicationTimes": extract EVERY time-stamped observation and medication administration/scheduled time you can find across the documents, in chronological order. Leave a field as "" if not recorded. For "earlyWarning": base the trend on how the vitals change over time in the documents (e.g. rising HR/RR, falling SpO2/BP = worsening).`
 
   parts.push({ type: 'text', text: intro })

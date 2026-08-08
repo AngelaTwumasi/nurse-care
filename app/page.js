@@ -30,6 +30,7 @@ import {
 } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Progress } from '@/components/ui/progress'
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator } from '@/components/ui/dropdown-menu'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer, Legend,
@@ -66,6 +67,26 @@ function fileToDataUrl(file) {
     reader.onload = () => resolve(reader.result)
     reader.onerror = reject
     reader.readAsDataURL(file)
+  })
+}
+
+// Upload a single document with real upload-progress reporting (XHR — fetch has no upload progress)
+function uploadDocument(patientId, doc, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `/api/patients/${patientId}/documents`)
+    xhr.setRequestHeader('Content-Type', 'application/json')
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100))
+    }
+    xhr.onload = () => {
+      let data = {}
+      try { data = JSON.parse(xhr.responseText) } catch {}
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data)
+      else reject(new Error(data.error || 'Upload failed'))
+    }
+    xhr.onerror = () => reject(new Error('Network error during upload'))
+    xhr.send(JSON.stringify({ documents: [doc] }))
   })
 }
 
@@ -284,7 +305,7 @@ function AddPatientDialog({ onAdd, disabled, trigger, reload }) {
 }
 
 /* ------------------------ Patient Card ------------------------ */
-function PatientCard({ patient, index, onOpen, onPopulate, onWorsen, generating, worsening, onDragStart, onDragOver, onDrop, dragging }) {
+function PatientCard({ patient, index, onOpen, onPopulate, onWorsen, onImprove, generating, worsening, improving, onDragStart, onDragOver, onDrop, dragging }) {
   const docCount = patient.documents?.length || 0
   const hasAI = !!patient.aiOutput
   const ew = patient.aiOutput?.earlyWarning
@@ -342,6 +363,11 @@ function PatientCard({ patient, index, onOpen, onPopulate, onWorsen, generating,
           </div>
           <div className="flex items-center gap-1.5">
             {patient.isSample && hasAI && (
+              <Button size="icon" variant="ghost" className="h-8 w-8 text-emerald-600 hover:text-emerald-700" title="Simulate recovery (demo)" disabled={improving} onClick={(e) => { e.stopPropagation(); onImprove && onImprove(patient.id) }}>
+                {improving ? <Loader2 className="h-4 w-4 animate-spin" /> : <TrendingDown className="h-4 w-4" />}
+              </Button>
+            )}
+            {patient.isSample && hasAI && (
               <Button size="icon" variant="ghost" className="h-8 w-8 text-amber-600 hover:text-red-600" title="Simulate deterioration (demo)" disabled={worsening} onClick={(e) => { e.stopPropagation(); onWorsen && onWorsen(patient.id) }}>
                 {worsening ? <Loader2 className="h-4 w-4 animate-spin" /> : <Siren className="h-4 w-4" />}
               </Button>
@@ -368,7 +394,7 @@ function PatientCard({ patient, index, onOpen, onPopulate, onWorsen, generating,
 }
 
 /* ------------------------ Upload Panel ------------------------ */
-function UploadPanel({ onUploadFiles, onAddNote, busy }) {
+function UploadPanel({ onUploadFiles, onAddNote, busy, progress }) {
   const [category, setCategory] = useState('careplan')
   const [note, setNote] = useState('')
   const [noteName, setNoteName] = useState('')
@@ -411,6 +437,19 @@ function UploadPanel({ onUploadFiles, onAddNote, busy }) {
           <span className="text-xs text-muted-foreground">PDF, JPG or PNG · multiple allowed</span>
           <input type="file" multiple accept="application/pdf,image/*" className="hidden" onChange={handleFiles} disabled={busy} />
         </label>
+
+        {progress && (
+          <div className="space-y-1.5 rounded-lg border bg-accent/40 p-3">
+            <div className="flex items-center justify-between text-xs">
+              <span className="flex items-center gap-1.5 truncate font-medium"><Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> Uploading {progress.name}</span>
+              <span className="tabular-nums text-muted-foreground">{progress.pct}%</span>
+            </div>
+            <Progress value={progress.pct} className="h-2" />
+            {progress.index && progress.total > 1 && (
+              <p className="text-[11px] text-muted-foreground">File {progress.index} of {progress.total}</p>
+            )}
+          </div>
+        )}
 
         <div className="relative">
           <Separator />
@@ -1064,7 +1103,7 @@ function NewObsDialog({ onSubmit }) {
   )
 }
 
-function HandoverNote({ value, onSave }) {
+function HandoverNote({ value, savedAt, onSave }) {
   const [text, setText] = useState(value || '')
   const [saving, setSaving] = useState(false)
   useEffect(() => { setText(value || '') }, [value])
@@ -1078,7 +1117,10 @@ function HandoverNote({ value, onSave }) {
       </CardHeader>
       <CardContent className="space-y-2">
         <Textarea value={text} onChange={(e) => setText(e.target.value)} rows={4} placeholder={'e.g. Family updated. Awaiting bloods at 1600. Prefers to mobilise after lunch\u2026'} />
-        <div className="flex justify-end">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[11px] text-muted-foreground">
+            {dirty ? 'Unsaved changes' : (savedAt ? `Last updated ${timeAgo(savedAt)}` : 'Not saved yet')}
+          </span>
           <Button size="sm" className="gap-2" onClick={save} disabled={saving || !dirty}>
             {saving && <Loader2 className="h-4 w-4 animate-spin" />} {dirty ? 'Save note' : 'Saved'}
           </Button>
@@ -1090,6 +1132,7 @@ function HandoverNote({ value, onSave }) {
 
 function PatientDetail({ patient, onBack, refresh, onDelete }) {
   const [busy, setBusy] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(null)
   const [generating, setGenerating] = useState(false)
   const [autoRefresh, setAutoRefresh] = useState(true)
   const autoRef = useRef(true)
@@ -1133,16 +1176,22 @@ function PatientDetail({ patient, onBack, refresh, onDelete }) {
     setBusy(true)
     try {
       let uploaded = 0
-      for (const f of files) {
-        if (f.size > 25 * 1024 * 1024) { toast.error(`${f.name} is too large (max 25MB)`); continue }
+      const valid = files.filter((f) => { if (f.size > 25 * 1024 * 1024) { toast.error(`${f.name} is too large (max 25MB)`); return false } return true })
+      for (let i = 0; i < valid.length; i++) {
+        const f = valid[i]
         const dataUrl = await fileToDataUrl(f)
-        await api(`/patients/${patient.id}/documents`, { method: 'POST', body: JSON.stringify({ documents: [{ name: f.name, category, kind: 'file', mimeType: f.type, dataUrl }] }) })
+        setUploadProgress({ name: f.name, pct: 0, index: i + 1, total: valid.length })
+        await uploadDocument(
+          patient.id,
+          { name: f.name, category, kind: 'file', mimeType: f.type, dataUrl },
+          (pct) => setUploadProgress({ name: f.name, pct, index: i + 1, total: valid.length })
+        )
         uploaded++
       }
       if (!uploaded) return
       toast.success(`${uploaded} document${uploaded > 1 ? 's' : ''} added`)
       await afterDocChange()
-    } catch (e) { toast.error(e.message) } finally { setBusy(false) }
+    } catch (e) { toast.error(e.message) } finally { setBusy(false); setUploadProgress(null) }
   }
 
   const addNote = async (name, category, textContent) => {
@@ -1229,12 +1278,12 @@ function PatientDetail({ patient, onBack, refresh, onDelete }) {
       <div className="grid gap-5 lg:grid-cols-5">
         {/* Left: docs */}
         <div className="space-y-4 lg:col-span-2">
-          <UploadPanel onUploadFiles={uploadFiles} onAddNote={addNote} busy={busy} />
+          <UploadPanel onUploadFiles={uploadFiles} onAddNote={addNote} busy={busy} progress={uploadProgress} />
           <div>
             <h3 className="mb-2 text-sm font-semibold text-muted-foreground">Uploaded documents ({patient.documents?.length || 0})</h3>
             <DocumentList documents={patient.documents} onDelete={deleteDoc} onOpen={openDoc} />
           </div>
-          <HandoverNote value={patient.handoverNote} onSave={saveHandoverNote} />
+          <HandoverNote value={patient.handoverNote} savedAt={patient.handoverNoteAt} onSave={saveHandoverNote} />
         </div>
 
         {/* Right: AI */}
@@ -1403,6 +1452,10 @@ function App() {
   const [boardOpen, setBoardOpen] = useState(false)
   const [generatingId, setGeneratingId] = useState(null)
   const [worseningId, setWorseningId] = useState(null)
+  const [improvingId, setImprovingId] = useState(null)
+  const [escalated, setEscalated] = useState([]) // [{id,name}] patients that just crossed into HIGH risk
+  const prevRiskRef = useRef({})
+  const firstLoadRef = useRef(true)
   const [bulk, setBulk] = useState(null) // {done,total} while populating all
   const [detail, setDetail] = useState(null) // full patient for detail view
   const [sortMode, setSortMode] = useState('manual') // 'manual' | 'risk'
@@ -1446,6 +1499,20 @@ function App() {
       const next = sortModeRef.current === 'risk'
         ? [...data].sort((a, b) => { const rk = (p) => { const r = p.aiOutput?.earlyWarning?.riskLevel; return r === 'high' ? 3 : r === 'medium' ? 2 : r === 'low' ? 1 : 0 }; return rk(b) - rk(a) })
         : applyManualOrder(data)
+      // Auto-escalate detection: flag patients that just crossed into HIGH risk
+      const newlyHigh = []
+      for (const p of next) {
+        const cur = p.aiOutput?.earlyWarning?.riskLevel
+        const prev = prevRiskRef.current[p.id]
+        if (cur === 'high' && prev && prev !== 'high') newlyHigh.push({ id: p.id, name: p.name })
+        prevRiskRef.current[p.id] = cur
+      }
+      if (firstLoadRef.current) {
+        firstLoadRef.current = false
+      } else if (newlyHigh.length) {
+        setEscalated(newlyHigh)
+        toast.error(`${newlyHigh.map((p) => p.name).join(', ')} escalated to HIGH risk`, { duration: 6000 })
+      }
       setPatients(next)
     } catch (e) { toast.error(e.message) } finally { setLoading(false) }
   }, [])
@@ -1501,6 +1568,15 @@ function App() {
       await load()
       toast.success('Deterioration simulated — watch the warning score climb')
     } catch (e) { toast.error(e.message) } finally { setWorseningId(null) }
+  }
+
+  const improvePatient = async (id) => {
+    setImprovingId(id)
+    try {
+      await api(`/patients/${id}/improve`, { method: 'POST' })
+      await load()
+      toast.success('Recovery simulated — warning score easing off')
+    } catch (e) { toast.error(e.message) } finally { setImprovingId(null) }
   }
 
   const populateAll = async () => {
@@ -1614,6 +1690,26 @@ function App() {
           )
         ) : (
           <>
+            {escalated.length > 0 && (
+              <div className="mb-4 flex items-start gap-3 rounded-lg border-2 border-red-300 bg-red-50 p-4 text-red-800 animate-in fade-in slide-in-from-top-2">
+                <div className="mt-0.5 rounded-lg bg-red-600 p-1.5 text-white"><Siren className="h-5 w-5" /></div>
+                <div className="flex-1">
+                  <p className="font-semibold">Patient deterioration — escalate now</p>
+                  <p className="text-sm">
+                    {escalated.map((e, i) => (
+                      <span key={e.id}>
+                        {i > 0 && ', '}
+                        <button className="font-medium underline underline-offset-2 hover:text-red-900" onClick={() => setSelectedId(e.id)}>{e.name}</button>
+                      </span>
+                    ))}
+                    {' '}just crossed into <b>HIGH risk</b>. Reassess, follow your escalation pathway and notify the senior RN / consider a MET call.
+                  </p>
+                </div>
+                <Button variant="ghost" size="icon" className="h-8 w-8 text-red-700 hover:bg-red-100" onClick={() => setEscalated([])} aria-label="Dismiss alert">
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+            )}
             {/* Shift banner */}
             <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
               <div>
@@ -1738,8 +1834,10 @@ function App() {
                       onOpen={setSelectedId}
                       onPopulate={populatePatient}
                       onWorsen={worsenPatient}
+                      onImprove={improvePatient}
                       generating={generatingId === p.id || (!!bulk && !p.aiOutput)}
                       worsening={worseningId === p.id}
+                      improving={improvingId === p.id}
                       onDragStart={handleDragStart}
                       onDragOver={handleDragOver}
                       onDrop={handleDrop}

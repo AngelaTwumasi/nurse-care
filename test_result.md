@@ -166,6 +166,21 @@ backend:
         -comment: "✅ ROUND 3 SCHEMA EXTENSION VERIFIED. Created patient 'Care Sched Test' (75yo, Post-op day 1) with comprehensive care plan document including: Medications with times (Paracetamol 1g PO 0600/1400, Ceftriaxone 1g IV 0800, Enoxaparin 40mg SC 2000), scheduled nursing tasks (hourly neuro obs, 4-hourly vitals, breakfast 0800, mobilise 1030, wound check), and vitals observations (0600 HR 82 BP 128/78, 1000 HR 96 BP 112/70). AI generation completed in 33.0s (REAL Gemini 2.5 Pro). ALL 12 required keys present and valid: 8 base keys + 3 Round 2 keys (medicationTimes, vitalsTimeline, earlyWarning) + NEW careSchedule[] (12 scheduled tasks with time/task/priority structure). ALL 3 medications have 'times' arrays populated correctly (Paracetamol ['0600','1400'], Ceftriaxone ['0800'], Enoxaparin ['2000']). All data persisted correctly. Test patient cleaned up. Backend AI generation with full schema is PRODUCTION-READY."
 
 frontend:
+  - task: "Recovery scenario endpoint (POST /api/patients/:id/improve) + handoverNoteAt timestamp"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "TWO backend additions. (A) NEW POST /api/patients/:id/improve = mirror of /worsen for RECOVERY: lowers aiOutput.earlyWarning.score by -2 (floor 0), recomputes riskLevel (>=7 high, >=4 medium, else low), sets trend='improving' (or 'stable' at 0), APPENDS an ewHistory entry. Returns {aiOutput,aiGeneratedAt}. (B) PUT /api/patients/:id now also sets handoverNoteAt=now whenever handoverNote is provided. TEST /improve: create sample {type:'sepsis'} (starts high, score ~8). Call /improve repeatedly and confirm score DECREASES by 2 each call (floor 0), riskLevel de-escalates high->medium->low, trend=='improving' (and 'stable' when score hits 0), ewHistory grows by 1 each call. TEST handoverNoteAt: PUT {handoverNote:'test'} then GET and confirm handoverNoteAt is a valid recent ISO timestamp; PUT again and confirm it updates. Cleanup created patients (never delete 'm')."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ BOTH FEATURES FULLY WORKING - ALL TESTS PASSED. Comprehensive backend testing completed. (A) RECOVERY ENDPOINT ✅: Created HIGH-risk sepsis sample patient (initial score=8, riskLevel=high, trend=worsening, ewHistory length=3). First /improve call: score decreased by 2 (8→6), riskLevel changed to medium, trend='improving', ewHistory grew by 1 (3→4). Called /improve repeatedly (4 total calls): Call 2: 6→4 (medium, improving), Call 3: 4→2 (low, improving), Call 4: 2→0 (low, stable). Final state: score=0 (floor working, never went negative), riskLevel=low, trend='stable' (correctly changed from 'improving' to 'stable' at score 0), ewHistory length=7 (grew by 4, one per call). RiskLevel de-escalation verified: high (score 8,6) → medium (score 6,4) → low (score 2,0). All thresholds correct (>=7 high, >=4 medium, <4 low). Sample patient cleaned up successfully. (B) HANDOVERNOTE TIMESTAMP ✅: Created patient 'NoteTime Test' (Bed 5, 65y, Asthma). PUT /api/patients/:id with {handoverNote:'First note'} returned HTTP 200. GET verified handoverNote='First note' AND handoverNoteAt is valid ISO timestamp (2026-08-08T00:45:50.966Z) within last minute. Waited 2s, PUT with {handoverNote:'Updated note'} returned HTTP 200. GET verified handoverNote updated to 'Updated note' AND handoverNoteAt changed to newer timestamp (2026-08-08T00:45:53.272Z, time difference 2.3s). PUT with only {name:'NoteTime Test Updated'} (no handoverNote) returned HTTP 200. GET verified name updated but handoverNote and handoverNoteAt remained intact (unchanged). Test patient cleaned up successfully. Patient 'm' preserved as instructed. Both recovery endpoint and handoverNoteAt timestamp features are PRODUCTION-READY."
+
   - task: "Large file storage via GridFS (upload/retrieve/delete + AI generate reads GridFS)"
     implemented: true
     working: true
@@ -273,13 +288,13 @@ frontend:
 
 metadata:
   created_by: "main_agent"
-  version: "1.8"
-  test_sequence: 11
-  run_ui: true
+  version: "1.9"
+  test_sequence: 12
+  run_ui: false
 
 test_plan:
   current_focus:
-    - "All Round 12 UI features tested and verified"
+    - "Recovery endpoint and handoverNoteAt timestamp tested and verified"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -1181,3 +1196,36 @@ agent_communication:
       ✅ No patient "m" existed during testing (no accidental deletion)
       
       NO CRITICAL ISSUES FOUND. All 3 Round 9 backend features are PRODUCTION-READY.
+
+    -agent: "testing"
+    -message: |
+      ✅ ROUND 12 BACKEND TESTING COMPLETE - ALL TESTS PASSED (2/2)
+      
+      Comprehensive backend testing of TWO new features completed successfully.
+      
+      Test Results Summary:
+      
+      1. ✅ RECOVERY ENDPOINT (POST /api/patients/:id/improve) - WORKING
+         - Created HIGH-risk sepsis sample patient (initial score=8, riskLevel=high, trend=worsening, ewHistory length=3)
+         - First /improve call: Score decreased by 2 (8→6), riskLevel changed to medium, trend='improving', ewHistory grew by 1 (3→4) ✅
+         - Called /improve repeatedly (4 total calls):
+           * Call 2: 6→4 (medium, improving) ✅
+           * Call 3: 4→2 (low, improving) ✅
+           * Call 4: 2→0 (low, stable) ✅
+         - Final state: score=0 (floor working, never went negative), riskLevel=low, trend='stable' (correctly changed from 'improving' to 'stable' at score 0), ewHistory length=7 (grew by 4, one per call) ✅
+         - RiskLevel de-escalation verified: high (score 8,6) → medium (score 6,4) → low (score 2,0) ✅
+         - All thresholds correct: >=7 high, >=4 medium, <4 low ✅
+         - Sample patient cleaned up successfully ✅
+      
+      2. ✅ HANDOVERNOTE TIMESTAMP (PUT /api/patients/:id) - WORKING
+         - Created patient 'NoteTime Test' (Bed 5, 65y, Asthma) ✅
+         - PUT with {handoverNote:'First note'}: handoverNote='First note' AND handoverNoteAt is valid ISO timestamp (2026-08-08T00:45:50.966Z) within last minute ✅
+         - Waited 2s, PUT with {handoverNote:'Updated note'}: handoverNote updated to 'Updated note' AND handoverNoteAt changed to newer timestamp (2026-08-08T00:45:53.272Z, time difference 2.3s) ✅
+         - PUT with only {name:'NoteTime Test Updated'} (no handoverNote): name updated but handoverNote and handoverNoteAt remained intact (unchanged) ✅
+         - Test patient cleaned up successfully ✅
+      
+      Test Cleanup:
+      ✅ All test patients deleted successfully
+      ✅ Patient 'm' preserved as instructed (never deleted)
+      
+      NO CRITICAL ISSUES FOUND. Both recovery endpoint and handoverNoteAt timestamp features are PRODUCTION-READY.

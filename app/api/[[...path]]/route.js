@@ -472,6 +472,7 @@ async function handleRoute(request, { params }) {
           ;['name', 'bed', 'age', 'diagnosis', 'handoverNote'].forEach((k) => {
             if (body[k] !== undefined) update[k] = body[k]
           })
+          if (body.handoverNote !== undefined) update.handoverNoteAt = new Date()
           if (body.careDone !== undefined) update.careDone = body.careDone
           await db.collection('patients').updateOne({ id }, { $set: update })
           const updated = await db.collection('patients').findOne({ id })
@@ -593,6 +594,30 @@ async function handleRoute(request, { params }) {
         ew.trend = 'worsening'
         ew.rationale = 'Simulated deterioration: observations trending worse this shift.'
         ew.escalation = nextRisk === 'high' ? 'Escalate now — notify senior RN and consider a MET/Rapid Response call.' : 'Increase observation frequency and inform the team.'
+        const newAi = { ...ai, earlyWarning: ew }
+        const generatedAt = new Date()
+        const prevHist = Array.isArray(patient.ewHistory) ? patient.ewHistory : []
+        const riskValue = nextRisk === 'high' ? 3 : nextRisk === 'medium' ? 2 : 1
+        const ewHistory = [...prevHist, { t: generatedAt, score: nextScore, risk: nextRisk, riskValue }].slice(-20)
+        await db.collection('patients').updateOne(
+          { id },
+          { $set: { aiOutput: newAi, aiGeneratedAt: generatedAt, ewHistory } }
+        )
+        return json({ aiOutput: newAi, aiGeneratedAt: generatedAt })
+      }
+
+      // /patients/:id/improve -> simulate recovery for training (lowers EWS + appends ewHistory)
+      if (seg[2] === 'improve' && seg.length === 3 && method === 'POST') {
+        const ai = patient.aiOutput || {}
+        const ew = { ...(ai.earlyWarning || {}) }
+        const curScore = (() => { const m = String(ew.score ?? '').match(/-?\d+(\.\d+)?/); return m ? parseFloat(m[0]) : 0 })()
+        const nextScore = Math.max(curScore - 2, 0)
+        const nextRisk = nextScore >= 7 ? 'high' : nextScore >= 4 ? 'medium' : 'low'
+        ew.score = String(nextScore)
+        ew.riskLevel = nextRisk
+        ew.trend = nextScore === 0 ? 'stable' : 'improving'
+        ew.rationale = 'Simulated recovery: observations trending back toward normal this shift.'
+        ew.escalation = nextRisk === 'high' ? 'Still high — keep close observation and inform the team.' : nextRisk === 'medium' ? 'Improving — continue current plan and monitor.' : 'Within normal limits — routine observations.'
         const newAi = { ...ai, earlyWarning: ew }
         const generatedAt = new Date()
         const prevHist = Array.isArray(patient.ewHistory) ? patient.ewHistory : []

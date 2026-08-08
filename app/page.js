@@ -197,15 +197,15 @@ function PatientForm({ onAdd, reload, onSuccess, submitLabel = 'Add patient' }) 
     try {
       const p = await onAdd(form)
       if (files.length && p?.id) {
-        const documents = []
+        let uploaded = 0
         for (const f of files) {
-          if (f.size > 12 * 1024 * 1024) { toast.error(`${f.name} is too large (max 12MB)`); continue }
+          if (f.size > 25 * 1024 * 1024) { toast.error(`${f.name} is too large (max 25MB)`); continue }
           const dataUrl = await fileToDataUrl(f)
-          documents.push({ name: f.name, category, kind: 'file', mimeType: f.type, dataUrl })
+          await api(`/patients/${p.id}/documents`, { method: 'POST', body: JSON.stringify({ documents: [{ name: f.name, category, kind: 'file', mimeType: f.type, dataUrl }] }) })
+          uploaded++
         }
-        if (documents.length) {
-          await api(`/patients/${p.id}/documents`, { method: 'POST', body: JSON.stringify({ documents }) })
-          toast.success(`${documents.length} document${documents.length > 1 ? 's' : ''} attached`)
+        if (uploaded) {
+          toast.success(`${uploaded} document${uploaded > 1 ? 's' : ''} attached`)
           if (reload) await reload()
         }
       }
@@ -284,7 +284,7 @@ function AddPatientDialog({ onAdd, disabled, trigger, reload }) {
 }
 
 /* ------------------------ Patient Card ------------------------ */
-function PatientCard({ patient, index, onOpen, onPopulate, generating, onDragStart, onDragOver, onDrop, dragging }) {
+function PatientCard({ patient, index, onOpen, onPopulate, onWorsen, generating, worsening, onDragStart, onDragOver, onDrop, dragging }) {
   const docCount = patient.documents?.length || 0
   const hasAI = !!patient.aiOutput
   const ew = patient.aiOutput?.earlyWarning
@@ -341,6 +341,11 @@ function PatientCard({ patient, index, onOpen, onPopulate, generating, onDragSta
             )}
           </div>
           <div className="flex items-center gap-1.5">
+            {patient.isSample && hasAI && (
+              <Button size="icon" variant="ghost" className="h-8 w-8 text-amber-600 hover:text-red-600" title="Simulate deterioration (demo)" disabled={worsening} onClick={(e) => { e.stopPropagation(); onWorsen && onWorsen(patient.id) }}>
+                {worsening ? <Loader2 className="h-4 w-4 animate-spin" /> : <Siren className="h-4 w-4" />}
+              </Button>
+            )}
             {hasAI && (
               <Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground" title="Print / PDF this care plan" onClick={(e) => { e.stopPropagation(); downloadHandoverPDF(patient, patient.aiOutput) }}>
                 <Printer className="h-4 w-4" />
@@ -457,21 +462,22 @@ function DocumentList({ documents, onDelete, onOpen }) {
   )
 }
 
-function DocViewer({ open, onOpenChange, documents, currentIndex, setCurrentIndex }) {
+function DocViewer({ open, onOpenChange, documents, currentIndex, setCurrentIndex, patientId }) {
   const d = documents[currentIndex]
   if (!d) return null
   const cat = CATEGORIES[d.category] || CATEGORIES.other
   const Icon = cat.icon
+  const contentUrl = d.dataUrl || (patientId ? `/api/patients/${patientId}/documents/${d.id}/content` : null)
   let preview
   if (d.kind === 'text') {
     preview = <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap rounded-lg border bg-muted/40 p-4 text-sm leading-relaxed">{d.textContent || '(empty note)'}</pre>
   } else if (d.mimeType && d.mimeType.startsWith('image/')) {
-    preview = <div className="flex max-h-[60vh] items-center justify-center overflow-auto rounded-lg border bg-muted/30 p-2"><img src={d.dataUrl} alt={d.name} className="max-h-[58vh] w-auto rounded" /></div>
+    preview = <div className="flex max-h-[60vh] items-center justify-center overflow-auto rounded-lg border bg-muted/30 p-2"><img src={contentUrl} alt={d.name} className="max-h-[58vh] w-auto rounded" /></div>
   } else if (d.mimeType === 'application/pdf') {
     preview = (
       <div className="space-y-2">
-        <iframe src={d.dataUrl} title={d.name} className="h-[60vh] w-full rounded-lg border" />
-        <a href={d.dataUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-primary hover:underline"><Download className="h-3 w-3" /> Open PDF in new tab</a>
+        <iframe src={contentUrl} title={d.name} className="h-[60vh] w-full rounded-lg border" />
+        <a href={contentUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-primary hover:underline"><Download className="h-3 w-3" /> Open PDF in new tab</a>
       </div>
     )
   } else {
@@ -762,6 +768,11 @@ function buildHandoverText(patient, ai) {
     L.push('')
   }
   if (ai.safetyNotice) L.push(ai.safetyNotice)
+  if (patient.handoverNote && patient.handoverNote.trim()) {
+    L.push('')
+    L.push('NURSE HANDOVER NOTE')
+    L.push(patient.handoverNote.trim())
+  }
   return L.join('\n')
 }
 
@@ -803,6 +814,7 @@ function downloadHandoverPDF(patient, ai) {
   ${(ai.medications || []).length ? `<h2>Medications</h2><ul>${list(ai.medications, (m) => `<li><b>${esc(m.name)}</b> ${esc(m.dose || '')} ${esc(m.route || '')} ${(m.times || []).length ? '<i>@ ' + esc((m.times || []).join(', ')) + '</i>' : ''} ${m.notes ? '— ' + esc(m.notes) : ''}</li>`)}</ul>` : ''}
   ${(ai.careSchedule || []).length ? `<h2>Care Schedule</h2><ul>${list(ai.careSchedule, (c) => `<li><span class="badge">${esc(c.time || '')}</span>${esc(c.task)}</li>`)}</ul>` : ''}
   ${(ai.redFlags || []).length ? `<h2>Red Flags — Escalate</h2><ul>${list(ai.redFlags, (r) => `<li>${esc(r)}</li>`)}</ul>` : ''}
+  ${patient.handoverNote && patient.handoverNote.trim() ? `<h2>Nurse Handover Note</h2><div style="white-space:pre-wrap;font-size:13px">${esc(patient.handoverNote)}</div>` : ''}
   <div class="foot">${esc(ai.safetyNotice || 'Verify all medications, doses and escalation with your senior/RN.')} · Generated by NurseCare on ${new Date().toLocaleString()}</div>
   </body></html>`
   const w = window.open('', '_blank')
@@ -1052,6 +1064,30 @@ function NewObsDialog({ onSubmit }) {
   )
 }
 
+function HandoverNote({ value, onSave }) {
+  const [text, setText] = useState(value || '')
+  const [saving, setSaving] = useState(false)
+  useEffect(() => { setText(value || '') }, [value])
+  const dirty = (text || '') !== (value || '')
+  const save = async () => { setSaving(true); try { await onSave(text) } finally { setSaving(false) } }
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex items-center gap-2"><StickyNote className="h-4 w-4 text-primary" /> Shift handover note</CardTitle>
+        <CardDescription>Your own quick notes for handover. Included in the Handover PDF & pack.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <Textarea value={text} onChange={(e) => setText(e.target.value)} rows={4} placeholder={'e.g. Family updated. Awaiting bloods at 1600. Prefers to mobilise after lunch\u2026'} />
+        <div className="flex justify-end">
+          <Button size="sm" className="gap-2" onClick={save} disabled={saving || !dirty}>
+            {saving && <Loader2 className="h-4 w-4 animate-spin" />} {dirty ? 'Save note' : 'Saved'}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
 function PatientDetail({ patient, onBack, refresh, onDelete }) {
   const [busy, setBusy] = useState(false)
   const [generating, setGenerating] = useState(false)
@@ -1096,15 +1132,15 @@ function PatientDetail({ patient, onBack, refresh, onDelete }) {
   const uploadFiles = async (files, category) => {
     setBusy(true)
     try {
-      const documents = []
+      let uploaded = 0
       for (const f of files) {
-        if (f.size > 12 * 1024 * 1024) { toast.error(`${f.name} is too large (max 12MB)`); continue }
+        if (f.size > 25 * 1024 * 1024) { toast.error(`${f.name} is too large (max 25MB)`); continue }
         const dataUrl = await fileToDataUrl(f)
-        documents.push({ name: f.name, category, kind: 'file', mimeType: f.type, dataUrl })
+        await api(`/patients/${patient.id}/documents`, { method: 'POST', body: JSON.stringify({ documents: [{ name: f.name, category, kind: 'file', mimeType: f.type, dataUrl }] }) })
+        uploaded++
       }
-      if (!documents.length) return
-      await api(`/patients/${patient.id}/documents`, { method: 'POST', body: JSON.stringify({ documents }) })
-      toast.success(`${documents.length} document${documents.length > 1 ? 's' : ''} added`)
+      if (!uploaded) return
+      toast.success(`${uploaded} document${uploaded > 1 ? 's' : ''} added`)
       await afterDocChange()
     } catch (e) { toast.error(e.message) } finally { setBusy(false) }
   }
@@ -1141,9 +1177,17 @@ function PatientDetail({ patient, onBack, refresh, onDelete }) {
     generate(true)
   }
 
+  const saveHandoverNote = async (text) => {
+    try {
+      await api(`/patients/${patient.id}`, { method: 'PUT', body: JSON.stringify({ handoverNote: text }) })
+      toast.success('Handover note saved')
+      await refresh()
+    } catch (e) { toast.error(e.message) }
+  }
+
   return (
     <div className="space-y-5">
-      <DocViewer open={viewerOpen} onOpenChange={setViewerOpen} documents={patient.documents || []} currentIndex={viewIndex} setCurrentIndex={setViewIndex} />
+      <DocViewer open={viewerOpen} onOpenChange={setViewerOpen} documents={patient.documents || []} currentIndex={viewIndex} setCurrentIndex={setViewIndex} patientId={patient.id} />
       <div className="flex items-center justify-between">
         <Button variant="ghost" onClick={onBack} className="gap-2 -ml-2"><ArrowLeft className="h-4 w-4" /> Back to shift</Button>
         <div className="flex items-center gap-2">
@@ -1190,6 +1234,7 @@ function PatientDetail({ patient, onBack, refresh, onDelete }) {
             <h3 className="mb-2 text-sm font-semibold text-muted-foreground">Uploaded documents ({patient.documents?.length || 0})</h3>
             <DocumentList documents={patient.documents} onDelete={deleteDoc} onOpen={openDoc} />
           </div>
+          <HandoverNote value={patient.handoverNote} onSave={saveHandoverNote} />
         </div>
 
         {/* Right: AI */}
@@ -1263,6 +1308,7 @@ function downloadHandoverPack(patients) {
         <tr><td class="lbl">R</td><td>${esc(s.recommendation)}</td></tr>
       </table>
       ${pri ? `<div class="pri"><b>Top priorities:</b><ul>${pri}</ul></div>` : ''}
+      ${p.handoverNote && p.handoverNote.trim() ? `<div class="pri"><b>Nurse note:</b><div style="white-space:pre-wrap">${esc(p.handoverNote)}</div></div>` : ''}
     </div>`
   }
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Shift Handover Pack</title>
@@ -1356,6 +1402,7 @@ function App() {
   const [tutorialOpen, setTutorialOpen] = useState(false)
   const [boardOpen, setBoardOpen] = useState(false)
   const [generatingId, setGeneratingId] = useState(null)
+  const [worseningId, setWorseningId] = useState(null)
   const [bulk, setBulk] = useState(null) // {done,total} while populating all
   const [detail, setDetail] = useState(null) // full patient for detail view
   const [sortMode, setSortMode] = useState('manual') // 'manual' | 'risk'
@@ -1445,6 +1492,15 @@ function App() {
       await load()
       toast.success(sortModeRef.current === 'risk' ? 'Populated · sorted by risk' : 'Nursing cares populated')
     } catch (e) { toast.error(e.message) } finally { setGeneratingId(null) }
+  }
+
+  const worsenPatient = async (id) => {
+    setWorseningId(id)
+    try {
+      await api(`/patients/${id}/worsen`, { method: 'POST' })
+      await load()
+      toast.success('Deterioration simulated — watch the warning score climb')
+    } catch (e) { toast.error(e.message) } finally { setWorseningId(null) }
   }
 
   const populateAll = async () => {
@@ -1681,7 +1737,9 @@ function App() {
                       index={i}
                       onOpen={setSelectedId}
                       onPopulate={populatePatient}
+                      onWorsen={worsenPatient}
                       generating={generatingId === p.id || (!!bulk && !p.aiOutput)}
+                      worsening={worseningId === p.id}
                       onDragStart={handleDragStart}
                       onDragOver={handleDragOver}
                       onDrop={handleDrop}

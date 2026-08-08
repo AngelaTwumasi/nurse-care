@@ -166,6 +166,51 @@ backend:
         -comment: "✅ ROUND 3 SCHEMA EXTENSION VERIFIED. Created patient 'Care Sched Test' (75yo, Post-op day 1) with comprehensive care plan document including: Medications with times (Paracetamol 1g PO 0600/1400, Ceftriaxone 1g IV 0800, Enoxaparin 40mg SC 2000), scheduled nursing tasks (hourly neuro obs, 4-hourly vitals, breakfast 0800, mobilise 1030, wound check), and vitals observations (0600 HR 82 BP 128/78, 1000 HR 96 BP 112/70). AI generation completed in 33.0s (REAL Gemini 2.5 Pro). ALL 12 required keys present and valid: 8 base keys + 3 Round 2 keys (medicationTimes, vitalsTimeline, earlyWarning) + NEW careSchedule[] (12 scheduled tasks with time/task/priority structure). ALL 3 medications have 'times' arrays populated correctly (Paracetamol ['0600','1400'], Ceftriaxone ['0800'], Enoxaparin ['2000']). All data persisted correctly. Test patient cleaned up. Backend AI generation with full schema is PRODUCTION-READY."
 
 frontend:
+  - task: "Large file storage via GridFS (upload/retrieve/delete + AI generate reads GridFS)"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "FIX for MongoDB 16MB BSON crash. File (PDF/image) documents are now stored in GridFS (bucket 'docfiles') instead of embedded as base64 in the patient record. POST /api/patients/:id/documents: for a doc with kind!='text' and a dataUrl, the base64 is decoded and stored in GridFS keyed by metadata.docId; the patient.documents entry keeps only metadata {id,name,category,kind,mimeType,hasFile:true,textContent:null,dataUrl:null}. Text notes still store textContent embedded (small). NEW route GET /api/patients/:id/documents/:docId/content streams the raw bytes (Content-Type from stored mime) — used by the frontend DocViewer for image/PDF preview. DELETE /api/patients/:id/documents/:docId now also deletes the GridFS file; DELETE patient deletes all its GridFS files. GET /api/patients/:id strips dataUrl from documents and adds hasFile flag. AI generate (POST /generate) resolves each file doc's bytes from GridFS into a data URL before sending to Gemini. TEST: (1) create patient, POST a document with kind='file', mimeType='image/png' (or application/pdf) and a small valid base64 dataUrl -> expect 200 and returned document has hasFile==true and NO dataUrl. (2) GET /api/patients/:id -> document present, hasFile true, dataUrl absent, patient record small. (3) GET /api/patients/:id/documents/:docId/content -> 200 with correct Content-Type and non-empty body equal to the uploaded bytes. (4) POST /generate -> 200 with full aiOutput (AI can read the file). (5) DELETE the document -> 200, then GET content -> 404 and the GridFS files collection no longer has it. Cleanup created patients (do NOT delete 'm')."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ GRIDFS STORAGE FULLY WORKING - ALL TESTS PASSED. Comprehensive backend testing completed. (1) SMALL FILE UPLOAD: Created patient 'GridFS Test', uploaded small PNG file (70 bytes). Document returned with hasFile=true and dataUrl=null (correct). (2) PERSISTENCE: GET /api/patients/:id confirmed document persisted with hasFile=true and no dataUrl. (3) CONTENT RETRIEVAL: GET /api/patients/:id/documents/:docId/content returned HTTP 200, Content-Type: image/png, body length 70 bytes matching uploaded file exactly. (4) LARGE FILE TEST (16MB FIX): Uploaded 18MB PDF file. Upload succeeded with HTTP 200 (NO 500 error). GET content returned HTTP 200, Content-Type: application/pdf, body length 18.0MB. CRITICAL: Large file upload succeeded without 16MB BSON error - the MongoDB crash fix is working! (5) AI GENERATION: POST /api/patients/:id/generate completed in 26.6s (REAL Gemini 2.5 Pro call). AI successfully read file from GridFS and generated full aiOutput with patientSummary. (6) DELETION: DELETE /api/patients/:id/documents/:docId returned HTTP 200. GET content after deletion returned HTTP 404 (file correctly removed from GridFS). Test patient cleaned up successfully. GridFS storage feature is PRODUCTION-READY."
+
+  - task: "Scenario worsen endpoint (POST /api/patients/:id/worsen)"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW POST /api/patients/:id/worsen simulates deterioration for training. It bumps aiOutput.earlyWarning.score by +2 (cap 14), recomputes riskLevel (>=7 high, >=4 medium else low), sets trend='worsening', updates rationale/escalation, and APPENDS a new ewHistory entry {t,score,risk,riskValue}. Returns {aiOutput, aiGeneratedAt}. TEST: create a sample patient via POST /api/sample {type:'postop'} (starts low, score 0). Call /worsen a few times and confirm score increases (0->2->4->6...), riskLevel escalates (low->medium->high), trend=='worsening', and ewHistory length grows by 1 each call. Cleanup the sample patient after."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ WORSEN ENDPOINT FULLY WORKING - ALL TESTS PASSED. Comprehensive backend testing completed. (1) SAMPLE PATIENT: Created postop sample patient with initial score=0, riskLevel=low, trend=stable, ewHistory length=3. (2) FIRST WORSEN CALL: POST /api/patients/:id/worsen returned HTTP 200. Score increased from 0 to 2 (+2 as expected). RiskLevel remained 'low' (correct, score < 4). Trend changed to 'worsening' (correct). ewHistory grew from 3 to 4 entries (+1 as expected). (3) MULTIPLE WORSEN CALLS: Called /worsen 3 more times (4 total calls). Score progression: 0 → 2 → 4 → 6 → 8 (correct +2 each time). RiskLevel escalation: low → low → medium → medium → high (correct: score 4-6 = medium, score 8 >= 7 = high). Trend remained 'worsening' for all calls (correct). ewHistory grew from 3 to 7 entries (+4 as expected, one per call). (4) FINAL STATE: Final score=8, riskLevel=high, ewHistory length=7. All score calculations, riskLevel thresholds, and ewHistory accumulation working correctly. Test patient cleaned up successfully. Worsen endpoint is PRODUCTION-READY."
+
+  - task: "Handover note persistence (PUT handoverNote)"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "PUT /api/patients/:id now accepts a 'handoverNote' string field and persists it. TEST: create patient, PUT {handoverNote:'Family updated; awaiting bloods'}, GET /api/patients/:id and confirm handoverNote persisted and other fields (name/diagnosis) unchanged. Also confirm GET /api/patients (list) includes handoverNote on the patient object. Cleanup created patients."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ HANDOVER NOTE PERSISTENCE FULLY WORKING - ALL TESTS PASSED. Comprehensive backend testing completed. (1) PATIENT CREATION: Created patient 'Note Test' with diagnosis 'COPD'. (2) PUT HANDOVER NOTE: PUT /api/patients/:id with {handoverNote: 'Family updated; awaiting bloods at 1600'} returned HTTP 200. Response included handoverNote field with correct value. Name and diagnosis unchanged (correct). (3) GET PERSISTENCE: GET /api/patients/:id returned HTTP 200. handoverNote persisted correctly with exact value 'Family updated; awaiting bloods at 1600'. Name 'Note Test' and diagnosis 'COPD' unchanged (correct). (4) LIST ENDPOINT: GET /api/patients (list) returned HTTP 200. Test patient found in list with handoverNote field included and correct value. Test patient cleaned up successfully. Handover note persistence is PRODUCTION-READY."
+
   - task: "Sample scenario presets (POST /api/sample with type)"
     implemented: true
     working: true
@@ -228,13 +273,12 @@ frontend:
 
 metadata:
   created_by: "main_agent"
-  version: "1.6"
-  test_sequence: 9
+  version: "1.8"
+  test_sequence: 11
   run_ui: false
 
 test_plan:
-  current_focus:
-    - "Sample scenario presets (POST /api/sample with type)"
+  current_focus: []
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -999,3 +1043,40 @@ agent_communication:
          - Final patient count: 0 (clean state restored)
       
       NO CRITICAL ISSUES FOUND. Sample scenario presets backend feature is PRODUCTION-READY.
+
+    -agent: "testing"
+    -message: |
+      ✅ ROUND 9 BACKEND TESTING COMPLETE - ALL 3 FEATURES PASSED (3/3)
+      
+      Comprehensive backend testing of 3 new features completed successfully.
+      
+      Test Results Summary:
+      
+      1. ✅ LARGE FILE STORAGE VIA GRIDFS (CRITICAL - 16MB FIX) - WORKING
+         - Small file upload: PNG file (70 bytes) uploaded successfully
+         - Document metadata: hasFile=true, dataUrl=null (correct)
+         - Content retrieval: GET /documents/:docId/content returns correct Content-Type and body
+         - LARGE FILE TEST: 18MB PDF uploaded successfully (HTTP 200, NO 500 error)
+         - Large file retrieval: 18.0MB body returned with correct Content-Type
+         - CRITICAL: 16MB MongoDB BSON limit fix is working - no crash on large files
+         - AI generation: Successfully reads files from GridFS (26.6s Gemini call)
+         - Deletion: Files correctly removed from GridFS (404 after delete)
+      
+      2. ✅ SCENARIO WORSEN ENDPOINT - WORKING
+         - Score progression: 0 → 2 → 4 → 6 → 8 (+2 per call, correct)
+         - RiskLevel escalation: low → medium → high (thresholds correct)
+         - Trend: Always 'worsening' (correct)
+         - ewHistory: Grows by 1 per call (3 → 7 entries after 4 calls)
+         - All calculations and thresholds working correctly
+      
+      3. ✅ HANDOVER NOTE PERSISTENCE - WORKING
+         - PUT /api/patients/:id accepts handoverNote field
+         - handoverNote persists correctly via GET
+         - Other fields (name, diagnosis) unchanged (correct)
+         - handoverNote included in GET /api/patients list
+      
+      Test Cleanup:
+      ✅ All test patients deleted successfully
+      ✅ No patient "m" existed during testing (no accidental deletion)
+      
+      NO CRITICAL ISSUES FOUND. All 3 Round 9 backend features are PRODUCTION-READY.

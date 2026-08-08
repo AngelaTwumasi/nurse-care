@@ -1,387 +1,638 @@
 #!/usr/bin/env python3
 """
-Backend test for NurseCare Sample Scenario Presets feature
-Tests POST /api/sample endpoint with different scenario types
+Backend test for NurseCare Next.js app - Round 9 features
+Tests:
+1. Large file storage via GridFS (fixes 16MB MongoDB crash)
+2. Scenario worsen endpoint
+3. Handover note persistence
 """
 
 import requests
 import json
-import os
-from typing import List, Dict, Any
+import base64
+import time
+import sys
 
-# Get base URL from environment
-BASE_URL = os.getenv('NEXT_PUBLIC_BASE_URL', 'https://web-nurse-app.preview.emergentagent.com')
-API_BASE = f"{BASE_URL}/api"
+BASE_URL = "https://web-nurse-app.preview.emergentagent.com/api"
 
-def print_test_header(test_name: str):
-    """Print a formatted test header"""
-    print(f"\n{'='*80}")
-    print(f"TEST: {test_name}")
-    print(f"{'='*80}")
+# Small 1x1 PNG for testing (43 bytes)
+SMALL_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+SMALL_PNG_DATAURL = f"data:image/png;base64,{SMALL_PNG_BASE64}"
 
-def print_result(passed: bool, message: str):
-    """Print test result"""
-    status = "✅ PASS" if passed else "❌ FAIL"
-    print(f"{status}: {message}")
+def log(msg):
+    print(f"[TEST] {msg}")
 
-def get_patients() -> List[Dict[str, Any]]:
-    """Get all patients"""
-    response = requests.get(f"{API_BASE}/patients")
-    if response.status_code == 200:
-        return response.json()
-    return []
+def create_large_file_dataurl(size_mb=18):
+    """Create a large base64 data URL for testing (simulates ~18-20MB file)"""
+    # Create a buffer of random-ish bytes
+    # We want the RAW bytes to be size_mb, not the base64 string
+    raw_size = int(size_mb * 1024 * 1024)
+    # Use a repeating pattern to save memory
+    pattern = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" * 1000
+    data = (pattern * (raw_size // len(pattern) + 1))[:raw_size]
+    encoded = base64.b64encode(data).decode('ascii')
+    return f"data:application/pdf;base64,{encoded}"
 
-def delete_patient(patient_id: str) -> bool:
-    """Delete a patient by ID"""
-    response = requests.delete(f"{API_BASE}/patients/{patient_id}")
-    return response.status_code == 200
-
-def create_sample_patient(scenario_type: str = None) -> Dict[str, Any]:
-    """Create a sample patient with optional scenario type"""
-    url = f"{API_BASE}/sample"
-    headers = {'Content-Type': 'application/json'}
+def test_feature_1_gridfs():
+    """
+    FEATURE 1: Large file storage via GridFS
+    Tests file upload, retrieval, AI generation, and deletion
+    """
+    log("=" * 80)
+    log("FEATURE 1: Large file storage via GridFS")
+    log("=" * 80)
     
-    if scenario_type:
-        body = json.dumps({"type": scenario_type})
-        response = requests.post(url, headers=headers, data=body)
-    else:
-        response = requests.post(url, headers=headers)
-    
-    return {
-        'status_code': response.status_code,
-        'data': response.json() if response.status_code in [200, 400] else None,
-        'response': response
-    }
-
-def validate_ai_output(ai_output: Dict[str, Any]) -> tuple[bool, List[str]]:
-    """Validate that aiOutput has all required keys"""
-    required_keys = [
-        'patientSummary',
-        'priorities',
-        'interventions',
-        'isbar',
-        'medications',
-        'medicationTimes',
-        'vitalsTimeline',
-        'careSchedule',
-        'earlyWarning',
-        'redFlags',
-        'newGradTips',
-        'safetyNotice'
-    ]
-    
-    missing_keys = []
-    for key in required_keys:
-        if key not in ai_output:
-            missing_keys.append(key)
-    
-    # Validate isbar has all 5 sections
-    if 'isbar' in ai_output:
-        isbar_keys = ['identify', 'situation', 'background', 'assessment', 'recommendation']
-        for key in isbar_keys:
-            if key not in ai_output['isbar']:
-                missing_keys.append(f'isbar.{key}')
-    
-    # Validate earlyWarning structure
-    if 'earlyWarning' in ai_output:
-        ew_keys = ['score', 'riskLevel', 'trend', 'rationale', 'escalation']
-        for key in ew_keys:
-            if key not in ai_output['earlyWarning']:
-                missing_keys.append(f'earlyWarning.{key}')
-    
-    return len(missing_keys) == 0, missing_keys
-
-def validate_patient_structure(patient: Dict[str, Any], expected_name_part: str, expected_risk: str) -> tuple[bool, List[str]]:
-    """Validate patient structure and content"""
-    errors = []
-    
-    # Check UUID format (not ObjectId)
-    if 'id' not in patient:
-        errors.append("Missing 'id' field")
-    elif not isinstance(patient['id'], str) or len(patient['id']) != 36:
-        errors.append(f"Invalid UUID format: {patient.get('id')}")
-    
-    # Check name contains expected part
-    if 'name' not in patient:
-        errors.append("Missing 'name' field")
-    elif expected_name_part not in patient['name']:
-        errors.append(f"Name '{patient['name']}' does not contain '{expected_name_part}'")
-    
-    # Check isSample flag
-    if 'isSample' not in patient:
-        errors.append("Missing 'isSample' field")
-    elif patient['isSample'] != True:
-        errors.append(f"isSample should be true, got {patient['isSample']}")
-    
-    # Check documents array
-    if 'documents' not in patient:
-        errors.append("Missing 'documents' field")
-    elif not isinstance(patient['documents'], list):
-        errors.append("documents should be an array")
-    elif len(patient['documents']) == 0:
-        errors.append("documents array is empty")
-    
-    # Check aiOutput exists
-    if 'aiOutput' not in patient:
-        errors.append("Missing 'aiOutput' field")
-    else:
-        # Validate aiOutput structure
-        valid, missing = validate_ai_output(patient['aiOutput'])
-        if not valid:
-            errors.append(f"aiOutput missing keys: {', '.join(missing)}")
-        
-        # Check earlyWarning.riskLevel
-        if 'earlyWarning' in patient['aiOutput']:
-            actual_risk = patient['aiOutput']['earlyWarning'].get('riskLevel')
-            if actual_risk != expected_risk:
-                errors.append(f"Expected riskLevel '{expected_risk}', got '{actual_risk}'")
-    
-    # Check ewHistory exists
-    if 'ewHistory' not in patient:
-        errors.append("Missing 'ewHistory' field")
-    elif not isinstance(patient['ewHistory'], list):
-        errors.append("ewHistory should be an array")
-    
-    return len(errors) == 0, errors
-
-def main():
-    print(f"\n{'#'*80}")
-    print("# NurseCare Backend Test - Sample Scenario Presets")
-    print(f"# API Base: {API_BASE}")
-    print(f"{'#'*80}")
-    
-    # Track created sample patients for cleanup
-    created_sample_ids = []
+    created_patient_id = None
+    small_doc_id = None
+    large_doc_id = None
     
     try:
-        # TEST 1: Check initial patient count
-        print_test_header("1. Check Initial Patient Count")
-        initial_patients = get_patients()
-        initial_count = len(initial_patients)
-        print(f"Initial patient count: {initial_count}")
+        # Step 1: Create a patient
+        log("Step 1: Creating patient 'GridFS Test'...")
+        resp = requests.post(f"{BASE_URL}/patients", json={
+            "name": "GridFS Test",
+            "bed": "B1",
+            "age": "60",
+            "diagnosis": "Pneumonia"
+        }, timeout=30)
         
-        # Check if patient 'm' exists
-        patient_m = None
-        for p in initial_patients:
-            if p.get('name') == 'm':
-                patient_m = p
-                print(f"Found patient 'm' with ID: {p.get('id')}")
-                break
+        if resp.status_code != 200:
+            log(f"❌ FAIL: Create patient returned {resp.status_code}: {resp.text[:200]}")
+            return False
         
-        if patient_m:
-            print_result(True, "Patient 'm' exists and will be preserved")
-        else:
-            print_result(True, "Patient 'm' not found (may not exist yet)")
+        patient = resp.json()
+        created_patient_id = patient.get('id')
+        log(f"✅ PASS: Patient created with ID {created_patient_id}")
         
-        # TEST 2: Create sepsis sample
-        print_test_header("2. Create Sepsis Sample Patient")
-        result = create_sample_patient('sepsis')
+        # Step 2: Upload a SMALL FILE document
+        log("Step 2: Uploading small PNG file document...")
+        resp = requests.post(f"{BASE_URL}/patients/{created_patient_id}/documents", json={
+            "documents": [{
+                "name": "scan.png",
+                "category": "vitals",
+                "kind": "file",
+                "mimeType": "image/png",
+                "dataUrl": SMALL_PNG_DATAURL
+            }]
+        }, timeout=30)
         
-        if result['status_code'] == 200:
-            patient = result['data']
-            created_sample_ids.append(patient['id'])
-            
-            print(f"✅ Status: 200 OK")
-            print(f"Patient ID: {patient.get('id')}")
-            print(f"Patient Name: {patient.get('name')}")
-            print(f"Diagnosis: {patient.get('diagnosis')}")
-            print(f"Risk Level: {patient.get('aiOutput', {}).get('earlyWarning', {}).get('riskLevel')}")
-            
-            valid, errors = validate_patient_structure(patient, 'Rita Kaur', 'high')
-            if valid:
-                print_result(True, "Sepsis sample patient created with correct structure and data")
-            else:
-                print_result(False, f"Validation errors: {'; '.join(errors)}")
-        else:
-            print_result(False, f"Expected 200, got {result['status_code']}: {result['data']}")
+        if resp.status_code != 200:
+            log(f"❌ FAIL: Upload small file returned {resp.status_code}: {resp.text[:200]}")
+            return False
         
-        # TEST 3: Create postop sample
-        print_test_header("3. Create Post-Op Sample Patient")
-        result = create_sample_patient('postop')
+        patient = resp.json()
+        docs = patient.get('documents', [])
+        if not docs:
+            log("❌ FAIL: No documents in response")
+            return False
         
-        if result['status_code'] == 200:
-            patient = result['data']
-            created_sample_ids.append(patient['id'])
-            
-            print(f"✅ Status: 200 OK")
-            print(f"Patient ID: {patient.get('id')}")
-            print(f"Patient Name: {patient.get('name')}")
-            print(f"Diagnosis: {patient.get('diagnosis')}")
-            print(f"Risk Level: {patient.get('aiOutput', {}).get('earlyWarning', {}).get('riskLevel')}")
-            
-            valid, errors = validate_patient_structure(patient, 'Tom Fischer', 'low')
-            if valid:
-                print_result(True, "Post-op sample patient created with correct structure and data")
-            else:
-                print_result(False, f"Validation errors: {'; '.join(errors)}")
-        else:
-            print_result(False, f"Expected 200, got {result['status_code']}: {result['data']}")
+        small_doc = docs[-1]  # Last added document
+        small_doc_id = small_doc.get('id')
+        has_file = small_doc.get('hasFile')
+        data_url = small_doc.get('dataUrl')
         
-        # TEST 4: Create CHF sample (default, no body)
-        print_test_header("4. Create CHF Sample Patient (default, no body)")
-        result = create_sample_patient()
+        log(f"✅ PASS: Document uploaded with ID {small_doc_id}")
+        log(f"   - hasFile: {has_file}")
+        log(f"   - dataUrl: {data_url}")
         
-        if result['status_code'] == 200:
-            patient = result['data']
-            created_sample_ids.append(patient['id'])
-            
-            print(f"✅ Status: 200 OK")
-            print(f"Patient ID: {patient.get('id')}")
-            print(f"Patient Name: {patient.get('name')}")
-            print(f"Diagnosis: {patient.get('diagnosis')}")
-            print(f"Risk Level: {patient.get('aiOutput', {}).get('earlyWarning', {}).get('riskLevel')}")
-            
-            valid, errors = validate_patient_structure(patient, 'Alan Reid', 'high')
-            if valid:
-                print_result(True, "CHF sample patient created with correct structure and data")
-            else:
-                print_result(False, f"Validation errors: {'; '.join(errors)}")
-        else:
-            print_result(False, f"Expected 200, got {result['status_code']}: {result['data']}")
+        if not has_file:
+            log("❌ FAIL: hasFile should be true")
+            return False
         
-        # TEST 5: Verify aiOutput completeness for one sample
-        print_test_header("5. Verify Complete aiOutput Structure")
-        if created_sample_ids:
-            # Get the first created sample patient
-            patients = get_patients()
-            sample_patient = None
-            for p in patients:
-                if p['id'] == created_sample_ids[0]:
-                    sample_patient = p
-                    break
-            
-            if sample_patient and 'aiOutput' in sample_patient:
-                ai_output = sample_patient['aiOutput']
-                print(f"Checking aiOutput for patient: {sample_patient['name']}")
-                
-                # Check all keys
-                all_keys = [
-                    'patientSummary', 'priorities', 'interventions', 'isbar',
-                    'medications', 'medicationTimes', 'vitalsTimeline', 'careSchedule',
-                    'earlyWarning', 'redFlags', 'newGradTips', 'safetyNotice'
-                ]
-                
-                missing = []
-                for key in all_keys:
-                    if key not in ai_output:
-                        missing.append(key)
-                    else:
-                        print(f"  ✅ {key}: present")
-                
-                # Check isbar sections
-                if 'isbar' in ai_output:
-                    isbar_sections = ['identify', 'situation', 'background', 'assessment', 'recommendation']
-                    for section in isbar_sections:
-                        if section in ai_output['isbar']:
-                            print(f"  ✅ isbar.{section}: present")
-                        else:
-                            missing.append(f'isbar.{section}')
-                
-                # Check earlyWarning fields
-                if 'earlyWarning' in ai_output:
-                    ew_fields = ['score', 'riskLevel', 'trend', 'rationale', 'escalation']
-                    for field in ew_fields:
-                        if field in ai_output['earlyWarning']:
-                            print(f"  ✅ earlyWarning.{field}: {ai_output['earlyWarning'][field]}")
-                        else:
-                            missing.append(f'earlyWarning.{field}')
-                
-                # Check ewHistory
-                if 'ewHistory' in sample_patient:
-                    print(f"  ✅ ewHistory: array with {len(sample_patient['ewHistory'])} entries")
-                else:
-                    missing.append('ewHistory')
-                
-                if not missing:
-                    print_result(True, "All required aiOutput keys and ewHistory present")
-                else:
-                    print_result(False, f"Missing keys: {', '.join(missing)}")
-            else:
-                print_result(False, "Could not retrieve sample patient for validation")
+        if data_url is not None and data_url != "":
+            log(f"❌ FAIL: dataUrl should be null or empty, got: {data_url}")
+            return False
         
-        # TEST 6: Max-4 enforcement
-        print_test_header("6. Test Max-4 Patient Enforcement")
-        current_patients = get_patients()
-        current_count = len(current_patients)
-        print(f"Current patient count: {current_count}")
+        log("✅ PASS: Document has hasFile=true and dataUrl is null/empty")
         
-        # Create samples until we reach 4
-        while current_count < 4:
-            print(f"Creating sample to reach max capacity ({current_count}/4)...")
-            result = create_sample_patient('chf')
-            if result['status_code'] == 200:
-                created_sample_ids.append(result['data']['id'])
-                current_count += 1
-                print(f"  ✅ Created sample patient (now {current_count}/4)")
-            else:
-                print_result(False, f"Failed to create sample: {result['status_code']}")
-                break
+        # Step 3: GET patient and verify document metadata
+        log("Step 3: GET patient and verify document...")
+        resp = requests.get(f"{BASE_URL}/patients/{created_patient_id}", timeout=30)
         
-        # Now try to create one more (should fail with 400)
-        if current_count == 4:
-            print(f"Attempting to create 5th patient (should fail)...")
-            result = create_sample_patient('sepsis')
-            
-            if result['status_code'] == 400:
-                error_msg = result['data'].get('error', '')
-                print(f"✅ Status: 400 (as expected)")
-                print(f"Error message: {error_msg}")
-                
-                if 'full' in error_msg.lower() or 'max' in error_msg.lower():
-                    print_result(True, "Max-4 enforcement working correctly")
-                else:
-                    print_result(False, f"Error message doesn't mention capacity: {error_msg}")
-            else:
-                print_result(False, f"Expected 400, got {result['status_code']}")
-        else:
-            print_result(False, f"Could not reach max capacity (stuck at {current_count}/4)")
+        if resp.status_code != 200:
+            log(f"❌ FAIL: GET patient returned {resp.status_code}")
+            return False
+        
+        patient = resp.json()
+        docs = patient.get('documents', [])
+        doc = next((d for d in docs if d.get('id') == small_doc_id), None)
+        
+        if not doc:
+            log("❌ FAIL: Document not found in patient")
+            return False
+        
+        if not doc.get('hasFile'):
+            log("❌ FAIL: hasFile should be true in GET response")
+            return False
+        
+        if doc.get('dataUrl') is not None and doc.get('dataUrl') != "":
+            log(f"❌ FAIL: dataUrl should be null/empty in GET response, got: {doc.get('dataUrl')}")
+            return False
+        
+        log("✅ PASS: Document persisted with hasFile=true and no dataUrl")
+        
+        # Step 4: GET document content
+        log("Step 4: GET document content via /documents/:docId/content...")
+        resp = requests.get(f"{BASE_URL}/patients/{created_patient_id}/documents/{small_doc_id}/content", timeout=30)
+        
+        if resp.status_code != 200:
+            log(f"❌ FAIL: GET content returned {resp.status_code}")
+            return False
+        
+        content_type = resp.headers.get('Content-Type', '')
+        body_length = len(resp.content)
+        
+        log(f"✅ PASS: Content retrieved successfully")
+        log(f"   - Content-Type: {content_type}")
+        log(f"   - Body length: {body_length} bytes")
+        
+        if 'image/png' not in content_type:
+            log(f"❌ FAIL: Expected Content-Type image/png, got {content_type}")
+            return False
+        
+        if body_length == 0:
+            log("❌ FAIL: Body length is 0")
+            return False
+        
+        # Verify the content matches what we uploaded
+        expected_bytes = base64.b64decode(SMALL_PNG_BASE64)
+        if resp.content != expected_bytes:
+            log(f"❌ FAIL: Content mismatch. Expected {len(expected_bytes)} bytes, got {body_length} bytes")
+            return False
+        
+        log("✅ PASS: Content matches uploaded file exactly")
+        
+        # Step 5: Upload a LARGE file (18-20MB) to test 16MB fix
+        log("Step 5: Uploading LARGE file (~18MB) to test 16MB BSON limit fix...")
+        log("   (This may take 10-20 seconds to generate and upload...)")
+        
+        large_dataurl = create_large_file_dataurl(18)
+        log(f"   Generated {len(large_dataurl) / (1024*1024):.1f}MB data URL")
+        
+        resp = requests.post(f"{BASE_URL}/patients/{created_patient_id}/documents", json={
+            "documents": [{
+                "name": "large_scan.pdf",
+                "category": "other",
+                "kind": "file",
+                "mimeType": "application/pdf",
+                "dataUrl": large_dataurl
+            }]
+        }, timeout=60)
+        
+        if resp.status_code != 200:
+            log(f"❌ FAIL: Upload large file returned {resp.status_code}: {resp.text[:500]}")
+            log("   This suggests the 16MB BSON limit fix is NOT working")
+            return False
+        
+        log("✅ PASS: Large file upload succeeded (16MB fix working!)")
+        
+        patient = resp.json()
+        docs = patient.get('documents', [])
+        large_doc = docs[-1]
+        large_doc_id = large_doc.get('id')
+        
+        log(f"   - Large document ID: {large_doc_id}")
+        log(f"   - hasFile: {large_doc.get('hasFile')}")
+        
+        # Step 5b: GET large file content
+        log("Step 5b: GET large file content...")
+        resp = requests.get(f"{BASE_URL}/patients/{created_patient_id}/documents/{large_doc_id}/content", timeout=60)
+        
+        if resp.status_code != 200:
+            log(f"❌ FAIL: GET large content returned {resp.status_code}")
+            return False
+        
+        content_type = resp.headers.get('Content-Type', '')
+        body_length = len(resp.content)
+        
+        log(f"✅ PASS: Large file content retrieved")
+        log(f"   - Content-Type: {content_type}")
+        log(f"   - Body length: {body_length / (1024*1024):.1f}MB")
+        
+        if 'application/pdf' not in content_type:
+            log(f"❌ FAIL: Expected Content-Type application/pdf, got {content_type}")
+            return False
+        
+        # Verify size is in expected range (17-21MB)
+        if body_length < 17 * 1024 * 1024 or body_length > 21 * 1024 * 1024:
+            log(f"❌ FAIL: Body length {body_length / (1024*1024):.1f}MB not in expected 17-21MB range")
+            return False
+        
+        log("✅ PASS: Large file size in expected range")
+        
+        # Step 6: POST /generate to verify AI can read GridFS files
+        log("Step 6: POST /generate to verify AI can read GridFS files...")
+        log("   (Testing with the small PNG file, not the large fake PDF)")
+        log("   (This is a REAL Gemini call, will take ~30-40 seconds...)")
+        
+        # First, delete the large fake PDF since Gemini can't process it
+        log("   Deleting large fake PDF first...")
+        resp = requests.delete(f"{BASE_URL}/patients/{created_patient_id}/documents/{large_doc_id}", timeout=30)
+        if resp.status_code != 200:
+            log(f"⚠ WARNING: Could not delete large doc: {resp.status_code}")
+        
+        start_time = time.time()
+        resp = requests.post(f"{BASE_URL}/patients/{created_patient_id}/generate", timeout=120)
+        elapsed = time.time() - start_time
+        
+        if resp.status_code != 200:
+            log(f"❌ FAIL: Generate returned {resp.status_code}: {resp.text[:500]}")
+            return False
+        
+        result = resp.json()
+        ai_output = result.get('aiOutput')
+        
+        if not ai_output:
+            log("❌ FAIL: No aiOutput in response")
+            return False
+        
+        log(f"✅ PASS: AI generation completed in {elapsed:.1f}s")
+        log(f"   - patientSummary: {ai_output.get('patientSummary', '')[:80]}...")
+        log(f"   - AI can read files from GridFS!")
+        log(f"   - CRITICAL: Large file (18MB) upload succeeded without 16MB BSON error!")
+        
+        # Step 7: DELETE small document
+        log("Step 7: DELETE small document...")
+        resp = requests.delete(f"{BASE_URL}/patients/{created_patient_id}/documents/{small_doc_id}", timeout=30)
+        
+        if resp.status_code != 200:
+            log(f"❌ FAIL: DELETE document returned {resp.status_code}")
+            return False
+        
+        log("✅ PASS: Document deleted")
+        
+        # Step 7b: Verify content is gone (404)
+        log("Step 7b: Verify content returns 404...")
+        resp = requests.get(f"{BASE_URL}/patients/{created_patient_id}/documents/{small_doc_id}/content", timeout=30)
+        
+        if resp.status_code != 404:
+            log(f"❌ FAIL: Expected 404, got {resp.status_code}")
+            return False
+        
+        log("✅ PASS: Content correctly returns 404 after deletion")
+        
+        log("=" * 80)
+        log("✅ FEATURE 1: ALL TESTS PASSED")
+        log("=" * 80)
+        return True
         
     except Exception as e:
-        print(f"\n❌ TEST SUITE ERROR: {str(e)}")
+        log(f"❌ EXCEPTION in Feature 1: {str(e)}")
         import traceback
         traceback.print_exc()
+        return False
     
     finally:
-        # CLEANUP: Delete all created sample patients
-        print_test_header("CLEANUP: Deleting Created Sample Patients")
-        
-        # Get current patients to identify samples
-        all_patients = get_patients()
-        
-        for patient in all_patients:
-            patient_id = patient.get('id')
-            patient_name = patient.get('name', '')
-            is_sample = patient.get('isSample', False)
-            
-            # Delete if it's a sample we created OR if it's marked as isSample
-            # BUT preserve patient 'm'
-            if patient_name == 'm':
-                print(f"  ⚠️  Preserving patient 'm' (ID: {patient_id})")
-                continue
-            
-            if patient_id in created_sample_ids or is_sample:
-                print(f"  Deleting sample patient: {patient_name} (ID: {patient_id})")
-                if delete_patient(patient_id):
-                    print(f"    ✅ Deleted successfully")
-                else:
-                    print(f"    ❌ Failed to delete")
-        
-        # Final count
-        final_patients = get_patients()
-        final_count = len(final_patients)
-        print(f"\nFinal patient count: {final_count}")
-        
-        # Verify patient 'm' still exists if it was there initially
-        if patient_m:
-            m_still_exists = any(p.get('name') == 'm' for p in final_patients)
-            if m_still_exists:
-                print_result(True, "Patient 'm' preserved successfully")
-            else:
-                print_result(False, "Patient 'm' was accidentally deleted!")
-        
-        print(f"\n{'#'*80}")
-        print("# Test Suite Complete")
-        print(f"{'#'*80}\n")
+        # Cleanup
+        if created_patient_id:
+            log(f"Cleanup: Deleting test patient {created_patient_id}...")
+            try:
+                requests.delete(f"{BASE_URL}/patients/{created_patient_id}", timeout=30)
+                log("✅ Cleanup complete")
+            except Exception as e:
+                log(f"⚠ Cleanup failed: {e}")
 
-if __name__ == '__main__':
-    main()
+def test_feature_2_worsen():
+    """
+    FEATURE 2: Scenario worsen endpoint
+    Tests POST /api/patients/:id/worsen
+    """
+    log("=" * 80)
+    log("FEATURE 2: Scenario worsen endpoint")
+    log("=" * 80)
+    
+    created_patient_id = None
+    
+    try:
+        # Step 1: Create a sample patient (postop type starts with score 0, low risk)
+        log("Step 1: Creating sample patient (postop)...")
+        resp = requests.post(f"{BASE_URL}/sample", json={"type": "postop"}, timeout=30)
+        
+        if resp.status_code != 200:
+            log(f"❌ FAIL: Create sample returned {resp.status_code}: {resp.text[:200]}")
+            return False
+        
+        patient = resp.json()
+        created_patient_id = patient.get('id')
+        
+        ai_output = patient.get('aiOutput', {})
+        ew = ai_output.get('earlyWarning', {})
+        initial_score = ew.get('score')
+        initial_risk = ew.get('riskLevel')
+        initial_trend = ew.get('trend')
+        ew_history = patient.get('ewHistory', [])
+        initial_history_len = len(ew_history)
+        
+        log(f"✅ PASS: Sample patient created")
+        log(f"   - ID: {created_patient_id}")
+        log(f"   - Initial score: {initial_score}")
+        log(f"   - Initial riskLevel: {initial_risk}")
+        log(f"   - Initial trend: {initial_trend}")
+        log(f"   - ewHistory length: {initial_history_len}")
+        
+        # Step 2: Call /worsen first time
+        log("Step 2: POST /worsen (1st time)...")
+        resp = requests.post(f"{BASE_URL}/patients/{created_patient_id}/worsen", timeout=30)
+        
+        if resp.status_code != 200:
+            log(f"❌ FAIL: Worsen returned {resp.status_code}: {resp.text[:200]}")
+            return False
+        
+        result = resp.json()
+        ai_output = result.get('aiOutput', {})
+        ew = ai_output.get('earlyWarning', {})
+        score_1 = ew.get('score')
+        risk_1 = ew.get('riskLevel')
+        trend_1 = ew.get('trend')
+        
+        log(f"✅ PASS: Worsen call 1 succeeded")
+        log(f"   - Score: {initial_score} → {score_1}")
+        log(f"   - RiskLevel: {initial_risk} → {risk_1}")
+        log(f"   - Trend: {trend_1}")
+        
+        # Verify score increased by 2
+        try:
+            initial_num = float(initial_score) if initial_score != 'N/A' else 0
+            score_1_num = float(score_1) if score_1 != 'N/A' else 0
+            if score_1_num != initial_num + 2:
+                log(f"❌ FAIL: Score should increase by 2, got {initial_num} → {score_1_num}")
+                return False
+        except (ValueError, TypeError):
+            log(f"⚠ WARNING: Could not parse scores as numbers: {initial_score}, {score_1}")
+        
+        if trend_1 != 'worsening':
+            log(f"❌ FAIL: Trend should be 'worsening', got '{trend_1}'")
+            return False
+        
+        log("✅ PASS: Score increased by 2, trend is 'worsening'")
+        
+        # Get patient to check ewHistory
+        resp = requests.get(f"{BASE_URL}/patients/{created_patient_id}", timeout=30)
+        patient = resp.json()
+        ew_history = patient.get('ewHistory', [])
+        
+        if len(ew_history) != initial_history_len + 1:
+            log(f"❌ FAIL: ewHistory should grow by 1, got {initial_history_len} → {len(ew_history)}")
+            return False
+        
+        log(f"✅ PASS: ewHistory grew by 1 (now {len(ew_history)} entries)")
+        
+        # Step 3: Call /worsen 3 more times
+        log("Step 3: Calling /worsen 3 more times...")
+        
+        for i in range(3):
+            resp = requests.post(f"{BASE_URL}/patients/{created_patient_id}/worsen", timeout=30)
+            
+            if resp.status_code != 200:
+                log(f"❌ FAIL: Worsen call {i+2} returned {resp.status_code}")
+                return False
+            
+            result = resp.json()
+            ai_output = result.get('aiOutput', {})
+            ew = ai_output.get('earlyWarning', {})
+            score = ew.get('score')
+            risk = ew.get('riskLevel')
+            trend = ew.get('trend')
+            
+            log(f"   Call {i+2}: score={score}, riskLevel={risk}, trend={trend}")
+            
+            if trend != 'worsening':
+                log(f"❌ FAIL: Trend should be 'worsening', got '{trend}'")
+                return False
+        
+        # Get final patient state
+        resp = requests.get(f"{BASE_URL}/patients/{created_patient_id}", timeout=30)
+        patient = resp.json()
+        ai_output = patient.get('aiOutput', {})
+        ew = ai_output.get('earlyWarning', {})
+        final_score = ew.get('score')
+        final_risk = ew.get('riskLevel')
+        ew_history = patient.get('ewHistory', [])
+        final_history_len = len(ew_history)
+        
+        log(f"✅ PASS: All worsen calls succeeded")
+        log(f"   - Final score: {final_score}")
+        log(f"   - Final riskLevel: {final_risk}")
+        log(f"   - ewHistory length: {initial_history_len} → {final_history_len}")
+        
+        # Verify score progression (0 → 2 → 4 → 6 → 8)
+        try:
+            final_num = float(final_score) if final_score != 'N/A' else 0
+            initial_num = float(initial_score) if initial_score != 'N/A' else 0
+            expected = initial_num + 8  # 4 calls * 2 points each
+            if final_num != expected:
+                log(f"❌ FAIL: Expected final score {expected}, got {final_num}")
+                return False
+        except (ValueError, TypeError):
+            log(f"⚠ WARNING: Could not verify score progression")
+        
+        # Verify riskLevel escalation
+        # Score 8 should be high (>=7)
+        try:
+            final_num = float(final_score) if final_score != 'N/A' else 0
+            if final_num >= 7 and final_risk != 'high':
+                log(f"❌ FAIL: Score {final_num} should be 'high' risk, got '{final_risk}'")
+                return False
+            elif 4 <= final_num < 7 and final_risk != 'medium':
+                log(f"❌ FAIL: Score {final_num} should be 'medium' risk, got '{final_risk}'")
+                return False
+        except (ValueError, TypeError):
+            pass
+        
+        log(f"✅ PASS: RiskLevel escalated correctly to '{final_risk}'")
+        
+        # Verify ewHistory grew by 4
+        if final_history_len != initial_history_len + 4:
+            log(f"❌ FAIL: ewHistory should grow by 4, got {initial_history_len} → {final_history_len}")
+            return False
+        
+        log(f"✅ PASS: ewHistory grew by 4 entries")
+        
+        log("=" * 80)
+        log("✅ FEATURE 2: ALL TESTS PASSED")
+        log("=" * 80)
+        return True
+        
+    except Exception as e:
+        log(f"❌ EXCEPTION in Feature 2: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
+    
+    finally:
+        # Cleanup
+        if created_patient_id:
+            log(f"Cleanup: Deleting test patient {created_patient_id}...")
+            try:
+                requests.delete(f"{BASE_URL}/patients/{created_patient_id}", timeout=30)
+                log("✅ Cleanup complete")
+            except Exception as e:
+                log(f"⚠ Cleanup failed: {e}")
+
+def test_feature_3_handover_note():
+    """
+    FEATURE 3: Handover note persistence
+    Tests PUT /api/patients/:id with handoverNote field
+    """
+    log("=" * 80)
+    log("FEATURE 3: Handover note persistence")
+    log("=" * 80)
+    
+    created_patient_id = None
+    
+    try:
+        # Step 1: Create a patient
+        log("Step 1: Creating patient 'Note Test'...")
+        resp = requests.post(f"{BASE_URL}/patients", json={
+            "name": "Note Test",
+            "diagnosis": "COPD"
+        }, timeout=30)
+        
+        if resp.status_code != 200:
+            log(f"❌ FAIL: Create patient returned {resp.status_code}: {resp.text[:200]}")
+            return False
+        
+        patient = resp.json()
+        created_patient_id = patient.get('id')
+        original_name = patient.get('name')
+        original_diagnosis = patient.get('diagnosis')
+        
+        log(f"✅ PASS: Patient created")
+        log(f"   - ID: {created_patient_id}")
+        log(f"   - Name: {original_name}")
+        log(f"   - Diagnosis: {original_diagnosis}")
+        
+        # Step 2: PUT handoverNote
+        log("Step 2: PUT handoverNote...")
+        handover_text = "Family updated; awaiting bloods at 1600"
+        resp = requests.put(f"{BASE_URL}/patients/{created_patient_id}", json={
+            "handoverNote": handover_text
+        }, timeout=30)
+        
+        if resp.status_code != 200:
+            log(f"❌ FAIL: PUT handoverNote returned {resp.status_code}: {resp.text[:200]}")
+            return False
+        
+        patient = resp.json()
+        handover_note = patient.get('handoverNote')
+        name = patient.get('name')
+        diagnosis = patient.get('diagnosis')
+        
+        log(f"✅ PASS: PUT succeeded")
+        log(f"   - handoverNote: {handover_note}")
+        log(f"   - Name: {name}")
+        log(f"   - Diagnosis: {diagnosis}")
+        
+        # Step 3: GET patient and verify handoverNote persisted
+        log("Step 3: GET patient and verify handoverNote...")
+        resp = requests.get(f"{BASE_URL}/patients/{created_patient_id}", timeout=30)
+        
+        if resp.status_code != 200:
+            log(f"❌ FAIL: GET patient returned {resp.status_code}")
+            return False
+        
+        patient = resp.json()
+        handover_note = patient.get('handoverNote')
+        name = patient.get('name')
+        diagnosis = patient.get('diagnosis')
+        
+        if handover_note != handover_text:
+            log(f"❌ FAIL: handoverNote mismatch. Expected '{handover_text}', got '{handover_note}'")
+            return False
+        
+        if name != original_name:
+            log(f"❌ FAIL: Name changed. Expected '{original_name}', got '{name}'")
+            return False
+        
+        if diagnosis != original_diagnosis:
+            log(f"❌ FAIL: Diagnosis changed. Expected '{original_diagnosis}', got '{diagnosis}'")
+            return False
+        
+        log(f"✅ PASS: handoverNote persisted correctly")
+        log(f"✅ PASS: Name and diagnosis unchanged")
+        
+        # Step 4: GET /patients (list) and verify handoverNote included
+        log("Step 4: GET /patients (list) and verify handoverNote...")
+        resp = requests.get(f"{BASE_URL}/patients", timeout=30)
+        
+        if resp.status_code != 200:
+            log(f"❌ FAIL: GET patients returned {resp.status_code}")
+            return False
+        
+        patients = resp.json()
+        test_patient = next((p for p in patients if p.get('id') == created_patient_id), None)
+        
+        if not test_patient:
+            log("❌ FAIL: Patient not found in list")
+            return False
+        
+        handover_note = test_patient.get('handoverNote')
+        
+        if handover_note != handover_text:
+            log(f"❌ FAIL: handoverNote not in list. Expected '{handover_text}', got '{handover_note}'")
+            return False
+        
+        log(f"✅ PASS: handoverNote included in patient list")
+        
+        log("=" * 80)
+        log("✅ FEATURE 3: ALL TESTS PASSED")
+        log("=" * 80)
+        return True
+        
+    except Exception as e:
+        log(f"❌ EXCEPTION in Feature 3: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
+    
+    finally:
+        # Cleanup
+        if created_patient_id:
+            log(f"Cleanup: Deleting test patient {created_patient_id}...")
+            try:
+                requests.delete(f"{BASE_URL}/patients/{created_patient_id}", timeout=30)
+                log("✅ Cleanup complete")
+            except Exception as e:
+                log(f"⚠ Cleanup failed: {e}")
+
+def main():
+    log("=" * 80)
+    log("NurseCare Backend Testing - Round 9")
+    log("Testing 3 new backend features")
+    log("=" * 80)
+    
+    results = {}
+    
+    # Test Feature 1: GridFS
+    results['Feature 1: GridFS'] = test_feature_1_gridfs()
+    
+    # Test Feature 2: Worsen endpoint
+    results['Feature 2: Worsen'] = test_feature_2_worsen()
+    
+    # Test Feature 3: Handover note
+    results['Feature 3: Handover note'] = test_feature_3_handover_note()
+    
+    # Summary
+    log("=" * 80)
+    log("FINAL SUMMARY")
+    log("=" * 80)
+    
+    for feature, passed in results.items():
+        status = "✅ PASS" if passed else "❌ FAIL"
+        log(f"{status}: {feature}")
+    
+    all_passed = all(results.values())
+    
+    if all_passed:
+        log("=" * 80)
+        log("🎉 ALL TESTS PASSED 🎉")
+        log("=" * 80)
+        return 0
+    else:
+        log("=" * 80)
+        log("⚠ SOME TESTS FAILED")
+        log("=" * 80)
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(main())

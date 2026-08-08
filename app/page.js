@@ -26,7 +26,7 @@ import {
   ClipboardCheck, Loader2, BookOpen, User, BedDouble, AlertTriangle, Lightbulb,
   CheckCircle2, FileUp, StickyNote, X, Download, Copy, Clock, TrendingUp,
   TrendingDown, Minus, Gauge, Siren, Volume2, Square, LayoutGrid,
-  Dumbbell, Apple, UserRound, CalendarClock, GripVertical, Users, ArrowDownWideNarrow, Printer, Search,
+  Dumbbell, Apple, UserRound, CalendarClock, GripVertical, Users, ArrowDownWideNarrow, Printer, Search, Camera,
 } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -279,6 +279,161 @@ function PatientForm({ onAdd, reload, onSuccess, submitLabel = 'Add patient' }) 
         </Button>
       </div>
     </div>
+  )
+}
+
+function CameraCapture({ onCapture, category }) {
+  const [open, setOpen] = useState(false)
+  const [error, setError] = useState('')
+  const videoRef = useRef(null)
+  const streamRef = useRef(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const start = async () => {
+      setError('')
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) throw new Error('no camera')
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false })
+        if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return }
+        streamRef.current = stream
+        if (videoRef.current) { videoRef.current.srcObject = stream; try { await videoRef.current.play() } catch {} }
+      } catch (e) {
+        setError('Camera not available on this device. Please use “Choose files” to upload a photo instead.')
+      }
+    }
+    const stop = () => { if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null } }
+    if (open) start(); else stop()
+    return () => { cancelled = true; stop() }
+  }, [open])
+
+  const capture = () => {
+    const v = videoRef.current
+    if (!v || !v.videoWidth) { toast.error('Camera not ready yet'); return }
+    const canvas = document.createElement('canvas')
+    canvas.width = v.videoWidth
+    canvas.height = v.videoHeight
+    canvas.getContext('2d').drawImage(v, 0, 0, canvas.width, canvas.height)
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.85)
+    const stamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    onCapture({ name: `Photo ${stamp}.jpg`, category, kind: 'file', mimeType: 'image/jpeg', dataUrl })
+    toast.success('Photo captured')
+    setOpen(false)
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant="outline" className="w-full gap-2"><Camera className="h-4 w-4 text-primary" /> Take a picture</Button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><Camera className="h-5 w-5 text-primary" /> Take a picture</DialogTitle>
+          <DialogDescription>Point the camera at the document, chart or wound and capture a clear photo.</DialogDescription>
+        </DialogHeader>
+        {error ? (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">{error}</div>
+        ) : (
+          <video ref={videoRef} playsInline muted className="max-h-[55vh] w-full rounded-lg border bg-black" />
+        )}
+        <DialogFooter>
+          <Button onClick={capture} disabled={!!error} className="gap-2"><Camera className="h-4 w-4" /> Capture photo</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function LandingUpload({ onSubmit }) {
+  const [category, setCategory] = useState('careplan')
+  const [docs, setDocs] = useState([])
+  const [submitting, setSubmitting] = useState(false)
+
+  const addFiles = async (fileList) => {
+    const files = Array.from(fileList || [])
+    const next = []
+    for (const f of files) {
+      if (f.size > 25 * 1024 * 1024) { toast.error(`${f.name} is too large (max 25MB)`); continue }
+      const dataUrl = await fileToDataUrl(f)
+      next.push({ name: f.name, category, kind: 'file', mimeType: f.type, dataUrl })
+    }
+    if (next.length) setDocs((prev) => [...prev, ...next])
+  }
+
+  const submit = async () => {
+    if (!docs.length) { toast.error('Add at least one document or photo first'); return }
+    setSubmitting(true)
+    try { await onSubmit(docs) } finally { setSubmitting(false) }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1.5">
+        <Label className="text-xs uppercase tracking-wide text-muted-foreground">Document category</Label>
+        <Select value={category} onValueChange={setCategory}>
+          <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {Object.entries(CATEGORIES).map(([k, v]) => (<SelectItem key={k} value={k}>{v.label}</SelectItem>))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <label className="flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-border p-5 text-center transition-colors hover:bg-accent/50">
+        <FileUp className="h-6 w-6 text-primary" />
+        <span className="text-sm font-medium">Choose files to upload</span>
+        <span className="text-xs text-muted-foreground">PDF, JPG or PNG · multiple allowed</span>
+        <input type="file" multiple accept="application/pdf,image/*" className="hidden" onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} />
+      </label>
+
+      <CameraCapture category={category} onCapture={(doc) => setDocs((prev) => [...prev, doc])} />
+
+      {docs.length > 0 && (
+        <div className="space-y-1.5">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{docs.length} document{docs.length > 1 ? 's' : ''} ready</p>
+          {docs.map((d, i) => {
+            const cat = CATEGORIES[d.category] || CATEGORIES.other
+            const Icon = cat.icon
+            return (
+              <div key={i} className="flex items-center gap-2 rounded-md border bg-card p-2 text-sm">
+                <Icon className={`h-4 w-4 shrink-0 ${cat.color}`} />
+                <span className="min-w-0 flex-1 truncate">{d.name}</span>
+                <span className="text-[11px] text-muted-foreground">{cat.label}</span>
+                <button onClick={() => setDocs((prev) => prev.filter((_, x) => x !== i))} className="text-muted-foreground hover:text-destructive" aria-label="Remove"><X className="h-4 w-4" /></button>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      <Button className="w-full gap-2" onClick={submit} disabled={submitting || !docs.length}>
+        {submitting ? <><Loader2 className="h-4 w-4 animate-spin" /> Uploading…</> : <><Sparkles className="h-4 w-4" /> Upload & continue</>}
+      </Button>
+    </div>
+  )
+}
+
+function WelcomeLanding({ onSubmit, onSample, onContinue, count }) {
+  return (
+    <Card className="mx-auto max-w-lg overflow-hidden">
+      <div className="relative h-28 w-full">
+        <img src={HERO_IMG} alt="Nurse" className="h-full w-full object-cover" />
+        <div className="absolute inset-0 bg-gradient-to-t from-primary/85 to-primary/25" />
+        <div className="absolute bottom-3 left-4 flex items-center gap-2 text-white">
+          <FileUp className="h-5 w-5" />
+          <span className="text-lg font-bold tracking-tight">Upload documents</span>
+        </div>
+      </div>
+      <CardContent className="pt-5">
+        {count > 0 && (
+          <button onClick={onContinue} className="mb-3 inline-flex items-center gap-1 text-sm text-primary hover:underline"><ArrowLeft className="h-4 w-4" /> Back to my shift ({count})</button>
+        )}
+        <p className="mb-4 text-sm text-muted-foreground">Upload a patient’s documents — snap a photo or choose a PDF/image. NurseCare creates the patient and takes you straight to <b>Populate</b>.</p>
+        <LandingUpload onSubmit={onSubmit} />
+        <div className="relative my-4"><Separator /><span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-card px-2 text-xs text-muted-foreground">or</span></div>
+        <Button variant="outline" className="w-full gap-2" onClick={() => onSample()}><Sparkles className="h-4 w-4 text-primary" /> Try a sample patient (ready-made care plan)</Button>
+        {count > 0 && <Button className="mt-3 w-full gap-2" onClick={onContinue}>Continue to my shift ({count})</Button>}
+      </CardContent>
+    </Card>
   )
 }
 
@@ -774,8 +929,17 @@ function buildHandoverText(patient, ai) {
   L.push(`NURSECARE HANDOVER — ${patient.name || 'Patient'}`)
   L.push(`Bed/Room: ${patient.bed || 'N/A'}   Age: ${patient.age || 'N/A'}`)
   if (patient.diagnosis) L.push(`Diagnosis: ${patient.diagnosis}`)
+  const hh = ai.handoverHeader || {}
+  if ((hh.alerts || []).length) L.push(`ALERTS: ${hh.alerts.join(' · ')}`)
+  if (hh.attendingDoctor && hh.attendingDoctor !== 'Not documented') L.push(`Attending: ${hh.attendingDoctor}`)
+  if (hh.background) L.push(`Background: ${hh.background}`)
   L.push('')
   if (ai.earlyWarning) L.push(`EARLY WARNING: Score ${ai.earlyWarning.score ?? 'N/A'} · ${ai.earlyWarning.riskLevel || ''} · trend ${ai.earlyWarning.trend || ''}`)
+  if ((ai.criticalActions || []).length) {
+    L.push('')
+    L.push('CRITICAL NURSING ACTIONS')
+    ;(ai.criticalActions || []).forEach((a) => L.push(`[${a.window || 'now'}] ${a.action}${a.rationale ? ' — ' + a.rationale : ''}`))
+  }
   L.push('')
   L.push('ISBAR')
   const s = ai.isbar || {}
@@ -806,6 +970,16 @@ function buildHandoverText(patient, ai) {
     ;(ai.redFlags || []).forEach((r) => L.push(`! ${r}`))
     L.push('')
   }
+  if ((ai.recommendations || []).length) {
+    L.push('RECOMMENDATIONS')
+    ;(ai.recommendations || []).forEach((r) => L.push(`• ${r}`))
+    L.push('')
+  }
+  if ((ai.outstandingTasks || []).length) {
+    L.push('YET TO COMPLETE')
+    ;(ai.outstandingTasks || []).forEach((t) => L.push(`[ ] ${t}`))
+    L.push('')
+  }
   if (ai.safetyNotice) L.push(ai.safetyNotice)
   if (patient.handoverNote && patient.handoverNote.trim()) {
     L.push('')
@@ -824,6 +998,10 @@ function downloadHandoverPDF(patient, ai) {
   const row = (label, val) => `<tr><td class="lbl">${label}</td><td>${esc(val)}</td></tr>`
   const list = (arr, fn) => (arr || []).map(fn).join('')
   const ewHtml = ai.earlyWarning ? `<div class="ew ew-${esc(ai.earlyWarning.riskLevel)}">Early Warning Score ${esc(ai.earlyWarning.score)} · ${esc(ai.earlyWarning.riskLevel)} risk · trend ${esc(ai.earlyWarning.trend)}<br/><small>${esc(ai.earlyWarning.rationale || '')}</small></div>` : ''
+  const hh = ai.handoverHeader || {}
+  const alertsHtml = (hh.alerts || []).length ? `<div class="alerts"><b>Alerts:</b> ${(hh.alerts || []).map((a) => `<span class="abadge">${esc(a)}</span>`).join(' ')}</div>` : ''
+  const attendHtml = (hh.attendingDoctor && hh.attendingDoctor !== 'Not documented') ? ` · Dr: ${esc(hh.attendingDoctor)}` : ''
+  const critHtml = (ai.criticalActions || []).length ? `<h2>Critical Nursing Actions</h2><ul>${list(ai.criticalActions, (a) => `<li><span class="badge">${esc(a.window || 'now')}</span><b>${esc(a.action)}</b>${a.rationale ? ' — ' + esc(a.rationale) : ''}</li>`)}</ul>` : ''
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Handover — ${esc(patient.name)}</title>
   <style>
     *{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;box-sizing:border-box}
@@ -840,10 +1018,14 @@ function downloadHandoverPDF(patient, ai) {
     .ew-low{background:#d1fae5;color:#065f46}.ew-medium{background:#fef3c7;color:#92400e}.ew-high{background:#fee2e2;color:#991b1b}
     .foot{margin-top:24px;font-size:11px;color:#64748b;border-top:1px solid #e2e8f0;padding-top:8px}
     .badge{display:inline-block;background:#f1f5f9;border-radius:4px;padding:1px 6px;font-size:11px;margin-right:4px}
+    .alerts{margin-top:8px;font-size:12.5px}
+    .abadge{display:inline-block;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;border-radius:4px;padding:1px 6px;font-size:11px;margin:2px 2px 0 0}
   </style></head><body>
   <h1>NurseCare Handover</h1>
-  <div class="meta"><b>${esc(patient.name)}</b> · ${esc(patient.bed || 'No bed')} · ${esc(patient.age || 'N/A')} yrs${patient.diagnosis ? ' · ' + esc(patient.diagnosis) : ''}</div>
+  <div class="meta"><b>${esc(patient.name)}</b> · ${esc(patient.bed || 'No bed')} · ${esc(patient.age || 'N/A')} yrs${patient.diagnosis ? ' · ' + esc(patient.diagnosis) : ''}${attendHtml}</div>
+  ${alertsHtml}
   ${ewHtml}
+  ${critHtml}
   <h2>ISBAR</h2>
   <table>${row('Identify', s.identify)}${row('Situation', s.situation)}${row('Background', s.background)}${row('Assessment', s.assessment)}${row('Recommendation', s.recommendation)}</table>
   <h2>Care Priorities</h2>
@@ -853,6 +1035,8 @@ function downloadHandoverPDF(patient, ai) {
   ${(ai.medications || []).length ? `<h2>Medications</h2><ul>${list(ai.medications, (m) => `<li><b>${esc(m.name)}</b> ${esc(m.dose || '')} ${esc(m.route || '')} ${(m.times || []).length ? '<i>@ ' + esc((m.times || []).join(', ')) + '</i>' : ''} ${m.notes ? '— ' + esc(m.notes) : ''}</li>`)}</ul>` : ''}
   ${(ai.careSchedule || []).length ? `<h2>Care Schedule</h2><ul>${list(ai.careSchedule, (c) => `<li><span class="badge">${esc(c.time || '')}</span>${esc(c.task)}</li>`)}</ul>` : ''}
   ${(ai.redFlags || []).length ? `<h2>Red Flags — Escalate</h2><ul>${list(ai.redFlags, (r) => `<li>${esc(r)}</li>`)}</ul>` : ''}
+  ${(ai.recommendations || []).length ? `<h2>Recommendations</h2><ul>${list(ai.recommendations, (r) => `<li>${esc(r)}</li>`)}</ul>` : ''}
+  ${(ai.outstandingTasks || []).length ? `<h2>Yet to Complete</h2><ul>${list(ai.outstandingTasks, (t) => `<li>&#9744; ${esc(t)}</li>`)}</ul>` : ''}
   ${patient.handoverNote && patient.handoverNote.trim() ? `<h2>Nurse Handover Note</h2><div style="white-space:pre-wrap;font-size:13px">${esc(patient.handoverNote)}</div>` : ''}
   <div class="foot">${esc(ai.safetyNotice || 'Verify all medications, doses and escalation with your senior/RN.')} · Generated by NurseCare on ${new Date().toLocaleString()}</div>
   </body></html>`
@@ -862,6 +1046,160 @@ function downloadHandoverPDF(patient, ai) {
   w.document.write(html)
   w.document.close()
   setTimeout(() => { w.focus(); w.print() }, 500)
+}
+
+function HandoverHeader({ header, patient }) {
+  if (!header) return null
+  const alerts = header.alerts || []
+  const na = (v) => (v && String(v).trim() && String(v).toLowerCase() !== 'not documented') ? v : 'Not documented'
+  const rows = [
+    ['Age', na(header.age || patient?.age)],
+    ['Diagnosis', na(header.diagnosis || patient?.diagnosis)],
+    ['Background', na(header.background)],
+    ['Attending doctor', na(header.attendingDoctor)],
+  ]
+  return (
+    <Card>
+      <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><ClipboardList className="h-4 w-4 text-primary" /> Handover sheet</CardTitle></CardHeader>
+      <CardContent className="space-y-3">
+        {alerts.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs font-semibold text-red-700"><AlertTriangle className="mr-1 inline h-3.5 w-3.5" />Alerts:</span>
+            {alerts.map((a, i) => (
+              <span key={i} className="inline-flex items-center rounded-md border border-red-200 bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">{a}</span>
+            ))}
+          </div>
+        )}
+        <div className="grid gap-x-4 gap-y-2 sm:grid-cols-2">
+          {rows.map(([label, val]) => (
+            <div key={label} className="text-sm">
+              <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</span>
+              <p>{val}</p>
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function CriticalActions({ actions }) {
+  if (!actions || !actions.length) return null
+  return (
+    <Card className="border-amber-300 bg-amber-50/70">
+      <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2 text-amber-800"><Siren className="h-4 w-4" /> Critical nursing actions</CardTitle></CardHeader>
+      <CardContent className="space-y-2">
+        {actions.map((a, i) => (
+          <div key={i} className="rounded-lg border border-amber-200 bg-white/70 p-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1 rounded-md bg-amber-600 px-2 py-0.5 text-xs font-semibold text-white"><Clock className="h-3 w-3" /> {a.window || 'now'}</span>
+              <span className="text-sm font-semibold text-amber-900">{a.action}</span>
+            </div>
+            {a.rationale && <p className="mt-1 text-xs text-amber-800/90">{a.rationale}</p>}
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  )
+}
+
+const DRSABCD_LABELS = [
+  ['danger', 'D', 'Danger'],
+  ['response', 'R', 'Response'],
+  ['sendForHelp', 'S', 'Send for help'],
+  ['airway', 'A', 'Airway'],
+  ['breathing', 'B', 'Breathing'],
+  ['circulation', 'C', 'Circulation'],
+  ['disability', 'D', 'Disability'],
+  ['exposure', 'E', 'Exposure'],
+]
+
+function AssessmentPanel({ ai }) {
+  const d = ai.drsabcd
+  const dm = ai.dietMobility
+  const asmt = ai.assessments
+  const lines = ai.linesDevices || []
+  const hasAny = d || dm || asmt || lines.length || ai.edd
+  if (!hasAny) return <p className="text-sm text-muted-foreground">No assessment details were found in the documents.</p>
+  return (
+    <div className="space-y-5">
+      {d && (
+        <div>
+          <h4 className="mb-2 flex items-center gap-2 text-sm font-semibold"><ShieldAlert className="h-4 w-4 text-primary" /> DRSABCD — rapid primary assessment</h4>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {DRSABCD_LABELS.filter(([k]) => d[k]).map(([k, letter, label]) => (
+              <div key={label} className="flex gap-2 rounded-lg border bg-card p-2.5">
+                <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-primary text-xs font-bold text-primary-foreground">{letter}</div>
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
+                  <p className="text-sm">{d[k]}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {dm && (dm.diet || dm.mobility || dm.aids) && (
+        <div>
+          <h4 className="mb-2 flex items-center gap-2 text-sm font-semibold"><Apple className="h-4 w-4 text-green-600" /> Diet & mobility</h4>
+          <div className="grid gap-2 sm:grid-cols-3">
+            {[['Diet', dm.diet, Apple], ['Mobility', dm.mobility, Dumbbell], ['Aids / assistance', dm.aids, UserRound]].filter(([, v]) => v).map(([label, val, Icon]) => (
+              <div key={label} className="rounded-lg border bg-card p-2.5 text-sm">
+                <p className="flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-muted-foreground"><Icon className="h-3.5 w-3.5" /> {label}</p>
+                <p className="mt-0.5">{val}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {asmt && ((asmt.done || []).length || (asmt.todo || []).length) ? (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <h4 className="mb-2 flex items-center gap-2 text-sm font-semibold text-emerald-700"><CheckCircle2 className="h-4 w-4" /> Assessments done</h4>
+            <ul className="space-y-1.5">
+              {(asmt.done || []).length ? asmt.done.map((x, i) => (
+                <li key={i} className="flex items-start gap-2 rounded-md border border-emerald-200 bg-emerald-50/60 p-2 text-sm"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" /> {x}</li>
+              )) : <li className="text-xs text-muted-foreground">None recorded.</li>}
+            </ul>
+          </div>
+          <div>
+            <h4 className="mb-2 flex items-center gap-2 text-sm font-semibold text-amber-700"><ListChecks className="h-4 w-4" /> Assessments to do</h4>
+            <ul className="space-y-1.5">
+              {(asmt.todo || []).length ? asmt.todo.map((x, i) => (
+                <li key={i} className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50/60 p-2 text-sm"><Clock className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" /> {x}</li>
+              )) : <li className="text-xs text-muted-foreground">None outstanding.</li>}
+            </ul>
+          </div>
+        </div>
+      ) : null}
+
+      {(lines.length > 0 || ai.edd) && (
+        <div>
+          <h4 className="mb-2 flex items-center gap-2 text-sm font-semibold"><Activity className="h-4 w-4 text-rose-600" /> Infusions, devices & tubes</h4>
+          <div className="space-y-2">
+            {lines.map((l, i) => (
+              <div key={i} className="rounded-lg border bg-card p-2.5">
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <span className="font-semibold">{l.type}</span>
+                  {l.site && <Badge variant="outline">{l.site}</Badge>}
+                  {l.detail && <span className="text-muted-foreground">{l.detail}</span>}
+                </div>
+                {l.notes && <p className="mt-1 text-xs text-muted-foreground">{l.notes}</p>}
+              </div>
+            ))}
+            {!lines.length && <p className="text-xs text-muted-foreground">No lines/devices documented.</p>}
+          </div>
+          {ai.edd && (
+            <div className="mt-2 inline-flex items-center gap-2 rounded-md bg-accent px-3 py-1.5 text-sm">
+              <CalendarClock className="h-4 w-4 text-primary" /> <span className="font-medium">EDD (est. discharge):</span> {ai.edd}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }
 
 function AIResults({ ai, patient, generatedAt, careDone, onToggleCare }) {
@@ -917,10 +1255,14 @@ function AIResults({ ai, patient, generatedAt, careDone, onToggleCare }) {
         </Card>
       )}
 
+      <HandoverHeader header={ai.handoverHeader} patient={patient} />
+      <CriticalActions actions={ai.criticalActions} />
+
       <Tabs defaultValue="priorities">
-        <TabsList className="grid w-full grid-cols-5">
+        <TabsList className="grid w-full grid-cols-6">
           <TabsTrigger value="priorities" className="gap-1.5"><ListChecks className="h-4 w-4" /><span className="hidden sm:inline">Priorities</span></TabsTrigger>
           <TabsTrigger value="interventions" className="gap-1.5"><ClipboardCheck className="h-4 w-4" /><span className="hidden sm:inline">Care</span></TabsTrigger>
+          <TabsTrigger value="assess" className="gap-1.5"><ShieldAlert className="h-4 w-4" /><span className="hidden sm:inline">Assess</span></TabsTrigger>
           <TabsTrigger value="timeline" className="gap-1.5"><Clock className="h-4 w-4" /><span className="hidden sm:inline">Timeline</span></TabsTrigger>
           <TabsTrigger value="meds" className="gap-1.5"><Pill className="h-4 w-4" /><span className="hidden sm:inline">Meds</span></TabsTrigger>
           <TabsTrigger value="isbar" className="gap-1.5"><ClipboardList className="h-4 w-4" /><span className="hidden sm:inline">ISBAR</span></TabsTrigger>
@@ -953,16 +1295,36 @@ function AIResults({ ai, patient, generatedAt, careDone, onToggleCare }) {
         <TabsContent value="interventions" className="mt-4 space-y-3">
           {(ai.interventions || []).map((it, i) => (
             <Card key={i}>
-              <CardContent className="pt-4 space-y-2">
+              <CardContent className="pt-4 space-y-3">
                 <p className="font-semibold flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-primary" /> {it.intervention}</p>
-                <div className="grid gap-2 sm:grid-cols-3 text-sm">
-                  <div><span className="text-xs font-medium text-muted-foreground">Frequency</span><p>{it.frequency || '\u2014'}</p></div>
-                  <div><span className="text-xs font-medium text-muted-foreground">Monitor</span><p>{it.monitoring || '\u2014'}</p></div>
-                  <div><span className="text-xs font-medium text-muted-foreground">Rationale</span><p>{it.rationale || '\u2014'}</p></div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-md bg-muted/40 p-2.5 text-sm">
+                    <span className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground"><Clock className="h-3.5 w-3.5" /> Frequency</span>
+                    <p className="mt-0.5">{it.frequency || '\u2014'}</p>
+                  </div>
+                  <div className="rounded-md bg-muted/40 p-2.5 text-sm">
+                    <span className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground"><Activity className="h-3.5 w-3.5" /> What to monitor</span>
+                    <p className="mt-0.5">{it.monitoring || '\u2014'}</p>
+                  </div>
+                  <div className="rounded-md bg-muted/40 p-2.5 text-sm">
+                    <span className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground"><Gauge className="h-3.5 w-3.5" /> How to monitor</span>
+                    <p className="mt-0.5">{it.howToMonitor || '\u2014'}</p>
+                  </div>
+                  <div className="rounded-md bg-muted/40 p-2.5 text-sm">
+                    <span className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground"><Lightbulb className="h-3.5 w-3.5" /> Why it matters</span>
+                    <p className="mt-0.5">{it.rationale || '\u2014'}</p>
+                  </div>
                 </div>
               </CardContent>
             </Card>
           ))}
+        </TabsContent>
+
+        {/* Assess */}
+        <TabsContent value="assess" className="mt-4">
+          <Card><CardContent className="pt-4">
+            <AssessmentPanel ai={ai} />
+          </CardContent></Card>
         </TabsContent>
 
         {/* Timeline */}
@@ -1026,6 +1388,26 @@ function AIResults({ ai, patient, generatedAt, careDone, onToggleCare }) {
           </Card>
         </TabsContent>
       </Tabs>
+
+      {(ai.recommendations || []).length > 0 && (
+        <Card className="border-primary/20 bg-accent/30">
+          <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2 text-primary"><ClipboardCheck className="h-4 w-4" /> Recommendations</CardTitle></CardHeader>
+          <CardContent><ul className="list-disc space-y-1 pl-5 text-sm">{ai.recommendations.map((r, i) => <li key={i}>{r}</li>)}</ul></CardContent>
+        </Card>
+      )}
+
+      {(ai.outstandingTasks || []).length > 0 && (
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><ListChecks className="h-4 w-4 text-primary" /> Yet to complete this shift</CardTitle></CardHeader>
+          <CardContent>
+            <ul className="space-y-1.5">
+              {ai.outstandingTasks.map((t, i) => (
+                <li key={i} className="flex items-start gap-2 rounded-md border p-2 text-sm"><Square className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" /> {t}</li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
 
       {(ai.redFlags || []).length > 0 && (
         <Card className="border-red-200 bg-red-50/60">
@@ -1454,6 +1836,7 @@ function App() {
   const [worseningId, setWorseningId] = useState(null)
   const [improvingId, setImprovingId] = useState(null)
   const [escalated, setEscalated] = useState([]) // [{id,name}] patients that just crossed into HIGH risk
+  const [showHome, setShowHome] = useState(false) // document-upload landing ("first section")
   const prevRiskRef = useRef({})
   const firstLoadRef = useRef(true)
   const [bulk, setBulk] = useState(null) // {done,total} while populating all
@@ -1546,6 +1929,19 @@ function App() {
       const p = await api('/sample', { method: 'POST', body: JSON.stringify({ type }) })
       setPatients((prev) => [...prev, p])
       toast.success('Demo patient added — open it to explore the care plan')
+      setSelectedId(p.id)
+    } catch (e) { toast.error(e.message) }
+  }
+
+  const createFromDocs = async (docs) => {
+    try {
+      const name = `Patient ${patients.length + 1}`
+      const p = await api('/patients', { method: 'POST', body: JSON.stringify({ name }) })
+      for (const d of docs) {
+        await uploadDocument(p.id, d)
+      }
+      await load()
+      toast.success('Documents uploaded — tap Populate to generate the care plan')
       setSelectedId(p.id)
     } catch (e) { toast.error(e.message) }
   }
@@ -1651,7 +2047,7 @@ function App() {
                 <ArrowLeft className="h-5 w-5" />
               </Button>
             )}
-            <button className="flex items-center gap-2.5" onClick={() => setSelectedId(null)}>
+            <button className="flex items-center gap-2.5" onClick={() => { setSelectedId(null); setShowHome(false) }}>
               <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-foreground">
                 <Stethoscope className="h-5 w-5" />
               </div>
@@ -1688,6 +2084,8 @@ function App() {
           ) : (
             <div className="flex h-64 items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>
           )
+        ) : showHome ? (
+          <WelcomeLanding onSubmit={async (docs) => { await createFromDocs(docs); setShowHome(false) }} onSample={(t) => { addSample(t); setShowHome(false) }} onContinue={() => setShowHome(false)} count={patients.length} />
         ) : (
           <>
             {escalated.length > 0 && (
@@ -1712,9 +2110,14 @@ function App() {
             )}
             {/* Shift banner */}
             <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
-              <div>
-                <h2 className="text-2xl font-bold tracking-tight">Your shift</h2>
-                <p className="text-sm text-muted-foreground">{patients.length} of {MAX_PATIENTS} patients · tap a patient to manage documents & generate cares</p>
+              <div className="flex items-center gap-2">
+                <Button variant="ghost" size="icon" className="h-9 w-9 -ml-1" onClick={() => setShowHome(true)} aria-label="Back to upload documents" title="Upload documents">
+                  <ArrowLeft className="h-5 w-5" />
+                </Button>
+                <div>
+                  <h2 className="text-2xl font-bold tracking-tight">Your shift</h2>
+                  <p className="text-sm text-muted-foreground">{patients.length} of {MAX_PATIENTS} patients · tap a patient to manage documents & generate cares</p>
+                </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <Button variant={sortMode === 'risk' ? 'default' : 'outline'} onClick={toggleSort} className="gap-2">
@@ -1809,13 +2212,13 @@ function App() {
                   </div>
                 </div>
                 <CardContent className="pt-5">
-                  <p className="mb-4 text-sm text-muted-foreground">Add your first patient below. You can attach their care plan, meds, vitals or allied-health notes now, or add them later — then tap <b>Populate</b> to generate the nursing cares.</p>
-                  <PatientForm onAdd={addPatient} reload={load} />
+                  <p className="mb-4 text-sm text-muted-foreground">Upload the patient’s documents — care plan, meds, vitals, doctor or allied-health notes. Snap a photo or choose a PDF/image. NurseCare creates the patient and takes you straight to <b>Populate</b>.</p>
+                  <LandingUpload onSubmit={createFromDocs} />
                   <div className="relative my-4">
                     <Separator />
                     <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-card px-2 text-xs text-muted-foreground">or</span>
                   </div>
-                  <Button variant="outline" className="w-full gap-2" onClick={addSample}>
+                  <Button variant="outline" className="w-full gap-2" onClick={() => addSample()}>
                     <Sparkles className="h-4 w-4 text-primary" /> Try a sample patient (ready-made care plan)
                   </Button>
                 </CardContent>

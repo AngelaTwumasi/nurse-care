@@ -1,5 +1,5 @@
 // NurseCare service worker — offline app shell + cached data for viewing away from the server
-const CACHE = 'nursecare-v2'
+const CACHE = 'nursecare-v3'
 const APP_SHELL = ['/']
 
 self.addEventListener('install', (e) => {
@@ -20,6 +20,8 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(request.url)
   if (request.method !== 'GET') return // POST/PUT/DELETE (AI generate etc.) go straight to network
   if (url.origin !== self.location.origin) return
+  // Never touch dev/HMR or Next.js internal streaming endpoints
+  if (url.pathname.includes('/_next/webpack-hmr') || url.pathname.includes('__nextjs') || url.pathname.includes('hot-update')) return
 
   // App navigations: network-first, fall back to the cached shell so the app opens offline
   if (request.mode === 'navigate') {

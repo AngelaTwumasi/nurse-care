@@ -26,7 +26,7 @@ import {
   ClipboardCheck, Loader2, BookOpen, User, BedDouble, AlertTriangle, Lightbulb,
   CheckCircle2, FileUp, StickyNote, X, Download, Copy, Clock, TrendingUp,
   TrendingDown, Minus, Gauge, Siren, Volume2, Square, LayoutGrid,
-  Dumbbell, Apple, UserRound, CalendarClock, GripVertical, Users, ArrowDownWideNarrow, Printer, Search, Camera, WifiOff, Pencil,
+  Dumbbell, Apple, UserRound, CalendarClock, GripVertical, Users, ArrowDownWideNarrow, Printer, Search, Camera, WifiOff, Pencil, Mic,
 } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -591,7 +591,40 @@ function PatientCard({ patient, index, onOpen, onPopulate, onWorsen, onImprove, 
 }
 
 /* ------------------------ Upload Panel ------------------------ */
-function UploadPanel({ onUploadFiles, onAddNote, busy, progress }) {
+function VoiceHandoverButton({ onTranscript, disabled }) {
+  const [recording, setRecording] = useState(false)
+  const recRef = useRef(null)
+  const textRef = useRef('')
+  const toggle = () => {
+    const SR = typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition)
+    if (!SR) { toast.error('Voice input isn’t supported in this browser. Try Chrome, or type/paste the note.'); return }
+    if (recording) { try { recRef.current?.stop() } catch {}; return }
+    const rec = new SR()
+    rec.lang = 'en-AU'; rec.continuous = true; rec.interimResults = true
+    textRef.current = ''
+    rec.onresult = (e) => {
+      let t = ''
+      for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript + ' '
+      textRef.current = t
+    }
+    rec.onerror = (e) => { if (e.error !== 'no-speech') toast.error('Voice capture error'); setRecording(false) }
+    rec.onend = () => {
+      setRecording(false)
+      const t = textRef.current.trim()
+      if (t) onTranscript(t)
+      else toast.error('Didn’t catch that — please try again')
+    }
+    recRef.current = rec
+    try { rec.start(); setRecording(true); toast('Recording handover… tap again to stop', { duration: 2500 }) } catch { toast.error('Could not start recording') }
+  }
+  return (
+    <Button type="button" variant="outline" className={`w-full gap-2 ${recording ? 'border-red-400 text-red-600' : ''}`} onClick={toggle} disabled={disabled}>
+      {recording ? <><span className="h-2 w-2 animate-pulse rounded-full bg-red-500" /> Stop &amp; save handover</> : <><Mic className="h-4 w-4 text-primary" /> Record voice handover</>}
+    </Button>
+  )
+}
+
+function UploadPanel({ onUploadFiles, onAddNote, onAddDoc, onVoiceHandover, busy, progress }) {
   const [category, setCategory] = useState('careplan')
   const [note, setNote] = useState('')
   const [noteName, setNoteName] = useState('')
@@ -634,6 +667,12 @@ function UploadPanel({ onUploadFiles, onAddNote, busy, progress }) {
           <span className="text-xs text-muted-foreground">PDF, JPG or PNG · multiple allowed</span>
           <input type="file" multiple accept="application/pdf,image/*" className="hidden" onChange={handleFiles} disabled={busy} />
         </label>
+
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <CameraCapture category={category} onCapture={(doc) => onAddDoc && onAddDoc({ ...doc, category })} />
+          <VoiceHandoverButton disabled={busy} onTranscript={(t) => onVoiceHandover && onVoiceHandover(t)} />
+        </div>
+        <p className="text-[11px] text-muted-foreground">Take a photo of a chart/monitor, or record a spoken handover — NurseCare transcribes it and populates the care plan.</p>
 
         {progress && (
           <div className="space-y-1.5 rounded-lg border bg-accent/40 p-3">
@@ -755,6 +794,22 @@ const URGENCY = {
   urgent: { label: 'Urgent', cls: 'bg-red-100 text-red-700 border-red-200' },
   soon: { label: 'Soon', cls: 'bg-amber-100 text-amber-700 border-amber-200' },
   routine: { label: 'Routine', cls: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
+}
+const URGENCY_RANK = { urgent: 0, soon: 1, routine: 2 }
+function riskRank(level) { return level === 'high' ? 3 : level === 'medium' ? 2 : level === 'low' ? 1 : 0 }
+// Sort a copy by urgency (urgent first), keeping original indices for care-done mapping
+function sortByUrgency(arr, key = 'urgency') {
+  return arr.map((item, origIndex) => ({ item, origIndex }))
+    .sort((a, b) => (URGENCY_RANK[a.item[key]] ?? 3) - (URGENCY_RANK[b.item[key]] ?? 3))
+}
+// Next undone care task for a patient (for the shift board)
+function nextDueTask(p) {
+  const sched = p.aiOutput?.careSchedule || []
+  const done = p.careDone || {}
+  const pending = sched.map((c, i) => ({ c, i })).filter(({ i }) => !done[i])
+  if (!pending.length) return null
+  pending.sort((a, b) => (URGENCY_RANK[a.c.priority] ?? 3) - (URGENCY_RANK[b.c.priority] ?? 3))
+  return pending[0].c
 }
 
 const RISK = {
@@ -897,7 +952,7 @@ function VitalsTimeline({ vitals = [], meds = [], care = [], careDone = {}, onTo
           </h4>
           <div className="relative space-y-2 pl-5">
             <span className="absolute left-1.5 top-1 bottom-1 w-px bg-border" />
-            {care.map((c, i) => {
+            {sortByUrgency(care, 'priority').map(({ item: c, origIndex: i }) => {
               const u = URGENCY[c.priority] || URGENCY.routine
               const done = !!careDone?.[i]
               const ds = done ? null : dueStatus(c.time)
@@ -1312,7 +1367,7 @@ function AIResults({ ai, patient, generatedAt, careDone, onToggleCare }) {
 
         {/* Priorities */}
         <TabsContent value="priorities" className="mt-4 space-y-3">
-          {(ai.priorities || []).map((p, i) => {
+          {[...(ai.priorities || [])].sort((a, b) => (URGENCY_RANK[a.urgency] ?? 3) - (URGENCY_RANK[b.urgency] ?? 3)).map((p, i) => {
             const u = URGENCY[p.urgency] || URGENCY.routine
             return (
               <Card key={i}>
@@ -1491,10 +1546,20 @@ function AIResults({ ai, patient, generatedAt, careDone, onToggleCare }) {
 }
 
 /* ------------------------ Patient Detail ------------------------ */
-function NewObsDialog({ onSubmit }) {
+function NewObsDialog({ onSave }) {
   const [open, setOpen] = useState(false)
   const [v, setV] = useState({ time: '', hr: '', bp: '', rr: '', spo2: '', temp: '' })
+  const [docs, setDocs] = useState([])
   const [saving, setSaving] = useState(false)
+  const addFiles = async (fileList) => {
+    const files = Array.from(fileList || [])
+    const next = []
+    for (const f of files) {
+      if (f.size > 25 * 1024 * 1024) { toast.error(`${f.name} is too large (max 25MB)`); continue }
+      next.push(await fileToDoc(f, 'vitals'))
+    }
+    if (next.length) setDocs((prev) => [...prev, ...next])
+  }
   const submit = async () => {
     const now = v.time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     const parts = []
@@ -1503,11 +1568,12 @@ function NewObsDialog({ onSubmit }) {
     if (v.rr) parts.push(`RR ${v.rr}`)
     if (v.spo2) parts.push(`SpO2 ${v.spo2}%`)
     if (v.temp) parts.push(`Temp ${v.temp}`)
-    if (!parts.length) { toast.error('Enter at least one vital'); return }
+    if (!parts.length && !docs.length) { toast.error('Enter at least one vital or attach a photo/file'); return }
     setSaving(true)
     try {
-      await onSubmit(`Obs ${now}`, `Obs ${now} ${parts.join(' ')}`)
+      await onSave({ name: `Obs ${now}`, vitalsText: parts.length ? `Obs ${now} ${parts.join(' ')}` : '', docs })
       setV({ time: '', hr: '', bp: '', rr: '', spo2: '', temp: '' })
+      setDocs([])
       setOpen(false)
     } catch (e) { toast.error(e.message) } finally { setSaving(false) }
   }
@@ -1525,7 +1591,7 @@ function NewObsDialog({ onSubmit }) {
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Record new observations</DialogTitle>
-          <DialogDescription>Enter fresh vitals — NurseCare re-reads them and updates the early-warning score.</DialogDescription>
+          <DialogDescription>Type fresh vitals and/or snap a photo of the obs chart or monitor — NurseCare re-reads them and updates the early-warning score.</DialogDescription>
         </DialogHeader>
         <div className="grid grid-cols-2 gap-3">
           {field('time', 'Time', 'now')}
@@ -1535,6 +1601,25 @@ function NewObsDialog({ onSubmit }) {
           {field('spo2', 'SpO2 %', 'e.g. 94')}
           {field('temp', 'Temp', 'e.g. 37.8')}
         </div>
+        <div className="relative my-1"><Separator /><span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-background px-2 text-xs text-muted-foreground">and / or attach</span></div>
+        <div className="flex gap-2">
+          <label className="flex flex-1 cursor-pointer items-center justify-center gap-2 rounded-md border border-dashed p-2 text-sm hover:bg-accent/50">
+            <FileUp className="h-4 w-4 text-primary" /> Choose file
+            <input type="file" multiple accept="application/pdf,image/*" className="hidden" onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} />
+          </label>
+          <CameraCapture category="vitals" onCapture={(doc) => setDocs((prev) => [...prev, doc])} />
+        </div>
+        {docs.length > 0 && (
+          <div className="space-y-1">
+            {docs.map((d, i) => (
+              <div key={i} className="flex items-center gap-2 rounded-md border bg-card p-1.5 text-xs">
+                <Camera className="h-3.5 w-3.5 text-primary" />
+                <span className="min-w-0 flex-1 truncate">{d.name}</span>
+                <button onClick={() => setDocs((prev) => prev.filter((_, x) => x !== i))} className="text-muted-foreground hover:text-destructive"><X className="h-3.5 w-3.5" /></button>
+              </div>
+            ))}
+          </div>
+        )}
         <DialogFooter>
           <Button onClick={submit} disabled={saving} className="gap-2">{saving && <Loader2 className="h-4 w-4 animate-spin" />} Save & refresh</Button>
         </DialogFooter>
@@ -1681,6 +1766,26 @@ function PatientDetail({ patient, onBack, refresh, onDelete }) {
     } catch (e) { toast.error(e.message) } finally { setBusy(false) }
   }
 
+  const addPhotoDoc = async (doc) => {
+    setBusy(true)
+    try {
+      await uploadDocument(patient.id, doc)
+      toast.success('Photo added')
+      await afterDocChange()
+    } catch (e) { toast.error(e.message) } finally { setBusy(false) }
+  }
+
+  const voiceHandover = async (transcript) => {
+    setBusy(true)
+    try {
+      const name = `Voice handover ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+      await api(`/patients/${patient.id}/documents`, { method: 'POST', body: JSON.stringify({ documents: [{ name, category: 'other', kind: 'text', textContent: transcript }] }) })
+      toast.success('Handover captured — populating care plan')
+      await refresh()
+      await generate(true)
+    } catch (e) { toast.error(e.message) } finally { setBusy(false) }
+  }
+
   const deleteDoc = async (docId) => {
     try {
       await api(`/patients/${patient.id}/documents/${docId}`, { method: 'DELETE' })
@@ -1697,8 +1802,14 @@ function PatientDetail({ patient, onBack, refresh, onDelete }) {
     } catch (e) { toast.error(e.message) }
   }
 
-  const addObs = async (name, text) => {
-    await api(`/patients/${patient.id}/documents`, { method: 'POST', body: JSON.stringify({ documents: [{ name, category: 'vitals', kind: 'text', textContent: text }] }) })
+  const saveObs = async ({ name, vitalsText, docs }) => {
+    if (!navigator.onLine) { toast.error('You’re offline. Reconnect to add obs and refresh the score.'); return }
+    if (vitalsText) {
+      await api(`/patients/${patient.id}/documents`, { method: 'POST', body: JSON.stringify({ documents: [{ name, category: 'vitals', kind: 'text', textContent: vitalsText }] }) })
+    }
+    for (const d of (docs || [])) {
+      await uploadDocument(patient.id, d)
+    }
     toast.success('Obs added — refreshing warning score')
     await refresh()
     generate(true)
@@ -1726,7 +1837,7 @@ function PatientDetail({ patient, onBack, refresh, onDelete }) {
       <div className="flex items-center justify-between">
         <Button variant="ghost" onClick={onBack} className="gap-2 -ml-2"><ArrowLeft className="h-4 w-4" /> Back to shift</Button>
         <div className="flex items-center gap-2">
-          <NewObsDialog onSubmit={addObs} />
+          <NewObsDialog onSave={saveObs} />
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button variant="ghost" className="gap-2 text-muted-foreground hover:text-destructive"><Trash2 className="h-4 w-4" /> Discharge</Button>
@@ -1767,7 +1878,7 @@ function PatientDetail({ patient, onBack, refresh, onDelete }) {
       <div className="grid gap-5 lg:grid-cols-5">
         {/* Left: docs */}
         <div className="space-y-4 lg:col-span-2">
-          <UploadPanel onUploadFiles={uploadFiles} onAddNote={addNote} busy={busy} progress={uploadProgress} />
+          <UploadPanel onUploadFiles={uploadFiles} onAddNote={addNote} onAddDoc={addPhotoDoc} onVoiceHandover={voiceHandover} busy={busy} progress={uploadProgress} />
           <div>
             <h3 className="mb-2 text-sm font-semibold text-muted-foreground">Uploaded documents ({patient.documents?.length || 0})</h3>
             <DocumentList documents={patient.documents} onDelete={deleteDoc} onOpen={openDoc} />
@@ -1885,46 +1996,58 @@ function ShiftBoard({ open, onOpenChange, patients, onOpenPatient }) {
       <DialogContent className="max-w-5xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><LayoutGrid className="h-5 w-5 text-primary" /> Shift board</DialogTitle>
-          <DialogDescription>All your patients at a glance — early-warning scores and top priorities.</DialogDescription>
+          <DialogDescription>All your patients ranked by risk — early-warning scores, top priority and the next due task.</DialogDescription>
         </DialogHeader>
         {patients.length === 0 ? (
           <p className="py-8 text-center text-sm text-muted-foreground">No patients on your shift yet.</p>
         ) : (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {patients.map((p) => {
+          <div className="max-h-[70vh] space-y-3 overflow-y-auto pr-1">
+            <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground"><ArrowDownWideNarrow className="h-3.5 w-3.5" /> Sorted by risk (highest first)</p>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {[...patients].sort((a, b) => {
+              const rk = riskRank(b.aiOutput?.earlyWarning?.riskLevel) - riskRank(a.aiOutput?.earlyWarning?.riskLevel)
+              if (rk !== 0) return rk
+              const sb = parseFloat(String(b.aiOutput?.earlyWarning?.score ?? '').match(/-?\d+(\.\d+)?/)?.[0] || '0')
+              const sa = parseFloat(String(a.aiOutput?.earlyWarning?.score ?? '').match(/-?\d+(\.\d+)?/)?.[0] || '0')
+              return sb - sa
+            }).map((p, rank) => {
               const ew = p.aiOutput?.earlyWarning
-              const pri = p.aiOutput?.priorities || []
+              const pri = [...(p.aiOutput?.priorities || [])].sort((a, b) => (URGENCY_RANK[a.urgency] ?? 3) - (URGENCY_RANK[b.urgency] ?? 3))
+              const due = nextDueTask(p)
+              const isTop = rank === 0 && riskRank(ew?.riskLevel) >= 2
               return (
-                <div key={p.id} className="flex flex-col rounded-lg border bg-card p-3">
+                <div key={p.id} className={`flex flex-col rounded-lg border bg-card p-3 ${isTop ? 'border-red-300 ring-1 ring-red-200' : ''}`}>
                   <div className="flex items-center justify-between gap-2">
                     <span className="truncate text-sm font-semibold">{p.name}</span>
                     <span className="shrink-0 text-xs text-muted-foreground">{p.bed || ''}</span>
                   </div>
+                  {isTop && <span className="mt-1 inline-flex w-fit items-center gap-1 rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-bold uppercase text-white"><AlertTriangle className="h-3 w-3" /> Top priority</span>}
                   {ew ? (
                     <div className={`mt-2 flex items-center justify-between rounded-md px-2 py-1 text-xs font-semibold ${riskBadgeCls(ew.riskLevel)}`}>
-                      <span>EWS {ew.score ?? 'N/A'}</span>
+                      <span>EWS {ew.score ?? 'N/A'} · {ew.riskLevel}</span>
                       <span className="inline-flex items-center gap-1"><TrendIcon trend={ew.trend} className="h-3 w-3" />{ew.trend || ''}</span>
                     </div>
                   ) : (
                     <div className="mt-2 rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">No cares generated</div>
                   )}
                   <div className="mt-2 flex-1">
-                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Top priorities</p>
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Top priority</p>
                     {pri.length ? (
-                      <ol className="mt-1 space-y-1 text-xs">
-                        {pri.slice(0, 3).map((x, idx) => (
-                          <li key={idx} className="flex gap-1.5">
-                            <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${x.urgency === 'urgent' ? 'bg-red-500' : x.urgency === 'soon' ? 'bg-amber-500' : 'bg-emerald-500'}`} />
-                            <span className="line-clamp-2">{x.priority}</span>
-                          </li>
-                        ))}
-                      </ol>
+                      <div className="mt-1 flex gap-1.5 text-xs">
+                        <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${pri[0].urgency === 'urgent' ? 'bg-red-500' : pri[0].urgency === 'soon' ? 'bg-amber-500' : 'bg-emerald-500'}`} />
+                        <span className="line-clamp-2 font-medium">{pri[0].priority}</span>
+                      </div>
                     ) : <p className="mt-1 text-xs text-muted-foreground">—</p>}
+                    <p className="mt-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Next due task</p>
+                    {due ? (
+                      <p className="mt-0.5 flex items-start gap-1 text-xs"><Clock className="mt-0.5 h-3 w-3 shrink-0 text-primary" /><span className="line-clamp-2">{due.time ? `${due.time} · ` : ''}{due.task}</span></p>
+                    ) : <p className="mt-0.5 text-xs text-muted-foreground">{p.aiOutput ? 'All done 🎉' : '—'}</p>}
                   </div>
                   <Button variant="outline" size="sm" className="mt-3 w-full" onClick={() => { onOpenChange(false); onOpenPatient(p.id) }}>Open</Button>
                 </div>
               )
             })}
+            </div>
           </div>
         )}
       </DialogContent>
@@ -1987,9 +2110,9 @@ function App() {
   const firstLoadRef = useRef(true)
   const [bulk, setBulk] = useState(null) // {done,total} while populating all
   const [detail, setDetail] = useState(null) // full patient for detail view
-  const [sortMode, setSortMode] = useState('manual') // 'manual' | 'risk'
+  const [sortMode, setSortMode] = useState('risk') // 'manual' | 'risk'
   const [search, setSearch] = useState('')
-  const sortModeRef = useRef('manual')
+  const sortModeRef = useRef('risk')
   const dragIndex = useRef(null)
   const [dragOver, setDragOver] = useState(null)
 

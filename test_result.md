@@ -1678,3 +1678,48 @@ agent_communication:
       4. Verify abbreviation reader scrolling behavior
       
       NO CRITICAL ISSUES FOUND. All tested features working correctly. App is PRODUCTION-READY.
+
+#====================================================================================================
+# Offline Data Sync (Phase 2) — added this session
+#====================================================================================================
+
+frontend:
+  - task: "Offline data sync (queue writes offline, auto-flush on reconnect)"
+    implemented: true
+    working: true
+    file: "/app/app/page.js, /app/app/offline-queue.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          NEW FEATURE — Offline Data Sync. Added /app/app/offline-queue.js: an IndexedDB-backed
+          mutation queue (enqueueOp/getAllOps/removeOp/queueCount/flushQueue/subscribeQueue). The
+          central api() helper now accepts {queueOnFail:true, label}. When a queueable write is
+          attempted while offline (navigator.onLine === false) OR the fetch throws a network error,
+          the request is stored in IndexedDB and api() returns {_queued:true} instead of throwing.
+          Queueable handlers (addNote, saveObs [text], toggleCare, saveHandoverNote,
+          savePatientDetails) apply an OPTIMISTIC local update via a new patchDetail() prop so the
+          UI reflects the change immediately offline. On the browser 'online' event (and on mount)
+          a sync manager runs flushQueue() which replays queued ops in timestamp order, dropping 4xx
+          ops and retrying on 5xx/network errors, then reloads data and toasts "Synced N changes".
+          UI: offline banner reworded ("save notes/obs/handover offline; they'll sync when you
+          reconnect"); a sky banner shows "N offline changes waiting to sync" + "Sync now" button
+          when online with a non-empty queue; an amber sub-banner shows the pending count while
+          offline; spinner while syncing.
+          SELF-VERIFIED via Playwright: opened patient, simulated offline (override navigator.onLine),
+          edited Shift handover note, clicked Save -> got "Saved offline — will sync when you
+          reconnect" toast + optimistic "Last updated just now" + pending banner. Restored online ->
+          queue auto-flushed, pending banner cleared, and GET /api/patients/:id confirmed the note
+          persisted to the server (handoverNote + handoverNoteAt). Photos/files still require a live
+          connection (not queued); AI generate/ingest/create-patient still require a connection.
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Added Offline Data Sync (Phase 2). Frontend-only change (no backend/API changes). Core flow
+      self-verified via Playwright + API check (handover note queued offline then synced to server).
+      Awaiting user decision on whether to run the full frontend testing agent for regression.
+

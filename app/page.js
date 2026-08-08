@@ -27,7 +27,9 @@ import {
   CheckCircle2, FileUp, StickyNote, X, Download, Copy, Clock, TrendingUp,
   TrendingDown, Minus, Gauge, Siren, Volume2, Square, LayoutGrid,
   Dumbbell, Apple, UserRound, CalendarClock, GripVertical, Users, ArrowDownWideNarrow, Printer, Search, Camera, WifiOff, Pencil, Mic,
+  RefreshCw, CloudUpload,
 } from 'lucide-react'
+import { enqueueOp, flushQueue, queueCount, subscribeQueue } from './offline-queue'
 import { Switch } from '@/components/ui/switch'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Progress } from '@/components/ui/progress'
@@ -52,13 +54,29 @@ const CATEGORIES = {
 const MAX_PATIENTS = 10
 
 async function api(path, opts = {}) {
-  const res = await fetch(`/api${path}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...opts,
-  })
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(data.error || 'Request failed')
-  return data
+  const { queueOnFail, label, ...fetchOpts } = opts
+  const method = (fetchOpts.method || 'GET').toUpperCase()
+  // If a write is marked queueable and we're offline, stash it for later instead of failing.
+  if (queueOnFail && typeof navigator !== 'undefined' && !navigator.onLine) {
+    await enqueueOp({ path, method, body: fetchOpts.body, label })
+    return { _queued: true }
+  }
+  try {
+    const res = await fetch(`/api${path}`, {
+      headers: { 'Content-Type': 'application/json' },
+      ...fetchOpts,
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || 'Request failed')
+    return data
+  } catch (e) {
+    // Network error (fetch throws TypeError) on a queueable write -> queue it.
+    if (queueOnFail && (e.name === 'TypeError' || (typeof navigator !== 'undefined' && !navigator.onLine))) {
+      await enqueueOp({ path, method, body: fetchOpts.body, label })
+      return { _queued: true }
+    }
+    throw e
+  }
 }
 
 function fileToDataUrl(file) {
@@ -1693,7 +1711,7 @@ function EditPatientDialog({ patient, onSave }) {
   )
 }
 
-function PatientDetail({ patient, onBack, refresh, onDelete }) {
+function PatientDetail({ patient, onBack, refresh, onDelete, patchDetail }) {
   const [busy, setBusy] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(null)
   const [generating, setGenerating] = useState(false)
@@ -1760,9 +1778,15 @@ function PatientDetail({ patient, onBack, refresh, onDelete }) {
   const addNote = async (name, category, textContent) => {
     setBusy(true)
     try {
-      await api(`/patients/${patient.id}/documents`, { method: 'POST', body: JSON.stringify({ documents: [{ name, category, kind: 'text', textContent }] }) })
-      toast.success('Note saved')
-      await afterDocChange()
+      const body = JSON.stringify({ documents: [{ name, category, kind: 'text', textContent }] })
+      const res = await api(`/patients/${patient.id}/documents`, { method: 'POST', body, queueOnFail: true, label: `Add note “${name}”` })
+      if (res?._queued) {
+        patchDetail?.((prev) => ({ ...prev, documents: [...(prev.documents || []), { id: `local-${Date.now()}`, name, category, kind: 'text', textContent, _pending: true }] }))
+        toast.success('Saved offline — will sync when you reconnect')
+      } else {
+        toast.success('Note saved')
+        await afterDocChange()
+      }
     } catch (e) { toast.error(e.message) } finally { setBusy(false) }
   }
 
@@ -1796,38 +1820,66 @@ function PatientDetail({ patient, onBack, refresh, onDelete }) {
   const toggleCare = async (idx) => {
     const done = { ...(patient.careDone || {}) }
     done[idx] = !done[idx]
+    // Optimistic: reflect the toggle immediately (works offline too).
+    patchDetail?.((prev) => ({ ...prev, careDone: done }))
     try {
-      await api(`/patients/${patient.id}`, { method: 'PUT', body: JSON.stringify({ careDone: done }) })
-      await refresh()
+      const res = await api(`/patients/${patient.id}`, { method: 'PUT', body: JSON.stringify({ careDone: done }), queueOnFail: true, label: 'Update care checklist' })
+      if (!res?._queued) await refresh()
     } catch (e) { toast.error(e.message) }
   }
 
   const saveObs = async ({ name, vitalsText, docs }) => {
-    if (!navigator.onLine) { toast.error('You’re offline. Reconnect to add obs and refresh the score.'); return }
-    if (vitalsText) {
-      await api(`/patients/${patient.id}/documents`, { method: 'POST', body: JSON.stringify({ documents: [{ name, category: 'vitals', kind: 'text', textContent: vitalsText }] }) })
-    }
-    for (const d of (docs || [])) {
-      await uploadDocument(patient.id, d)
-    }
-    toast.success('Obs added — refreshing warning score')
-    await refresh()
-    generate(true)
+    setBusy(true)
+    try {
+      // Files/photos can't be queued reliably yet — require a connection for those.
+      if ((docs || []).length && !navigator.onLine) {
+        toast.error('You’re offline. Photo/file obs need a connection — text obs will still be saved offline.')
+      }
+      let queued = false
+      if (vitalsText) {
+        const body = JSON.stringify({ documents: [{ name, category: 'vitals', kind: 'text', textContent: vitalsText }] })
+        const res = await api(`/patients/${patient.id}/documents`, { method: 'POST', body, queueOnFail: true, label: `Add obs “${name}”` })
+        if (res?._queued) {
+          queued = true
+          patchDetail?.((prev) => ({ ...prev, documents: [...(prev.documents || []), { id: `local-${Date.now()}`, name, category: 'vitals', kind: 'text', textContent: vitalsText, _pending: true }] }))
+        }
+      }
+      if (navigator.onLine) {
+        for (const d of (docs || [])) { await uploadDocument(patient.id, d) }
+      }
+      if (queued) {
+        toast.success('Obs saved offline — will sync & re-score when you reconnect')
+      } else {
+        toast.success('Obs added — refreshing warning score')
+        await refresh()
+        generate(true)
+      }
+    } catch (e) { toast.error(e.message) } finally { setBusy(false) }
   }
 
   const saveHandoverNote = async (text) => {
     try {
-      await api(`/patients/${patient.id}`, { method: 'PUT', body: JSON.stringify({ handoverNote: text }) })
-      toast.success('Handover note saved')
-      await refresh()
+      const res = await api(`/patients/${patient.id}`, { method: 'PUT', body: JSON.stringify({ handoverNote: text }), queueOnFail: true, label: 'Save handover note' })
+      if (res?._queued) {
+        patchDetail?.((prev) => ({ ...prev, handoverNote: text, handoverNoteAt: new Date().toISOString() }))
+        toast.success('Saved offline — will sync when you reconnect')
+      } else {
+        toast.success('Handover note saved')
+        await refresh()
+      }
     } catch (e) { toast.error(e.message) }
   }
 
   const savePatientDetails = async (form) => {
     try {
-      await api(`/patients/${patient.id}`, { method: 'PUT', body: JSON.stringify(form) })
-      toast.success('Patient details updated')
-      await refresh()
+      const res = await api(`/patients/${patient.id}`, { method: 'PUT', body: JSON.stringify(form), queueOnFail: true, label: 'Update patient details' })
+      if (res?._queued) {
+        patchDetail?.((prev) => ({ ...prev, ...form }))
+        toast.success('Saved offline — will sync when you reconnect')
+      } else {
+        toast.success('Patient details updated')
+        await refresh()
+      }
     } catch (e) { toast.error(e.message) }
   }
 
@@ -2110,6 +2162,14 @@ function App() {
   const firstLoadRef = useRef(true)
   const [bulk, setBulk] = useState(null) // {done,total} while populating all
   const [detail, setDetail] = useState(null) // full patient for detail view
+  const [pending, setPending] = useState(0) // queued offline mutations awaiting sync
+  const [syncing, setSyncing] = useState(false)
+  const patchDetail = useCallback((patch) => {
+    setDetail((prev) => {
+      if (!prev) return prev
+      return typeof patch === 'function' ? patch(prev) : { ...prev, ...patch }
+    })
+  }, [])
   const [sortMode, setSortMode] = useState('risk') // 'manual' | 'risk'
   const [search, setSearch] = useState('')
   const sortModeRef = useRef('risk')
@@ -2178,6 +2238,41 @@ function App() {
     if (selectedId) { setDetail(null); loadDetail(selectedId) }
     else setDetail(null)
   }, [selectedId, loadDetail])
+
+  // Offline sync manager: track queued mutations and flush them when back online.
+  const refreshPending = useCallback(async () => {
+    try { setPending(await queueCount()) } catch {}
+  }, [])
+
+  const runSync = useCallback(async () => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) return
+    const before = await queueCount()
+    if (!before) { setPending(0); return }
+    setSyncing(true)
+    try {
+      const done = await flushQueue()
+      await refreshPending()
+      if (done > 0) {
+        toast.success(`Synced ${done} offline change${done > 1 ? 's' : ''}`)
+        await load()
+        if (selectedIdRef.current) await loadDetail(selectedIdRef.current)
+      }
+    } catch (e) { /* will retry on next reconnect */ } finally { setSyncing(false) }
+  }, [load, loadDetail, refreshPending])
+
+  const selectedIdRef = useRef(null)
+  useEffect(() => { selectedIdRef.current = selectedId }, [selectedId])
+
+  useEffect(() => {
+    refreshPending()
+    const unsub = subscribeQueue(refreshPending)
+    const onOnline = () => runSync()
+    window.addEventListener('online', onOnline)
+    // Attempt a sync on mount too (in case we reloaded while online with a stale queue)
+    if (typeof navigator !== 'undefined' && navigator.onLine) runSync()
+    return () => { unsub(); window.removeEventListener('online', onOnline) }
+  }, [refreshPending, runSync])
+
 
   useEffect(() => {
     if (typeof window !== 'undefined' && !localStorage.getItem('nursecare_seen_tutorial')) {
@@ -2359,7 +2454,21 @@ function App() {
 
       {!online && (
         <div className="flex items-center justify-center gap-2 bg-amber-500 px-4 py-1.5 text-center text-xs font-medium text-white">
-          <WifiOff className="h-3.5 w-3.5" /> You’re offline — you can still view your loaded patients & care plans. Generating new cares needs a connection.
+          <WifiOff className="h-3.5 w-3.5" /> You’re offline — you can still view patients and save notes, obs &amp; handover changes. They’ll sync when you reconnect.
+        </div>
+      )}
+      {online && pending > 0 && (
+        <div className="flex items-center justify-center gap-2 bg-sky-600 px-4 py-1.5 text-center text-xs font-medium text-white">
+          {syncing ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <CloudUpload className="h-3.5 w-3.5" />}
+          {syncing ? 'Syncing your offline changes…' : `${pending} offline change${pending > 1 ? 's' : ''} waiting to sync`}
+          {!syncing && (
+            <button onClick={() => runSync()} className="ml-1 rounded bg-white/20 px-2 py-0.5 font-semibold hover:bg-white/30">Sync now</button>
+          )}
+        </div>
+      )}
+      {!online && pending > 0 && (
+        <div className="flex items-center justify-center gap-2 bg-amber-600 px-4 py-1 text-center text-[11px] font-medium text-white">
+          <CloudUpload className="h-3 w-3" /> {pending} change{pending > 1 ? 's' : ''} saved on this device — will sync automatically when you’re back online
         </div>
       )}
 
@@ -2373,6 +2482,7 @@ function App() {
               onBack={() => setSelectedId(null)}
               refresh={async () => { await load(); await loadDetail(selectedId) }}
               onDelete={deletePatient}
+              patchDetail={patchDetail}
             />
           ) : (
             <div className="flex h-64 items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>

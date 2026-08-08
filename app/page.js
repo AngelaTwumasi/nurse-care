@@ -642,13 +642,26 @@ function DocumentList({ documents, onDelete, onOpen }) {
   )
 }
 
-function DocViewer({ open, onOpenChange, documents, currentIndex, setCurrentIndex, patientId }) {
+function DocViewer({ open, onOpenChange, documents, currentIndex, setCurrentIndex, patientId, refresh }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [saving, setSaving] = useState(false)
   const d = documents[currentIndex]
+  useEffect(() => { setEditing(false) }, [currentIndex, open])
   if (!d) return null
   const cat = CATEGORIES[d.category] || CATEGORIES.other
   const Icon = cat.icon
   const contentUrl = d.dataUrl || (patientId ? `/api/patients/${patientId}/documents/${d.id}/content` : null)
   const isAudio = (d.mimeType && d.mimeType.startsWith('audio/')) || d.kind === 'audio'
+  const saveTranscript = async () => {
+    setSaving(true)
+    try {
+      await api(`/patients/${patientId}/documents/${d.id}`, { method: 'PUT', body: JSON.stringify({ transcript: draft }) })
+      toast.success('Transcript updated — regenerate to read it into the care plan')
+      setEditing(false)
+      await refresh?.()
+    } catch (e) { toast.error(e.message) } finally { setSaving(false) }
+  }
   let preview
   if (d.kind === 'text') {
     preview = <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap rounded-lg border bg-muted/40 p-4 text-sm leading-relaxed">{d.textContent || '(empty note)'}</pre>
@@ -660,8 +673,21 @@ function DocViewer({ open, onOpenChange, documents, currentIndex, setCurrentInde
           {contentUrl ? <audio controls preload="none" src={contentUrl} className="w-full" /> : <p className="text-xs text-muted-foreground">Audio will be available once uploaded.</p>}
         </div>
         <div className="rounded-lg border bg-card p-4">
-          <div className="mb-2 flex items-center gap-2 text-sm font-semibold"><FileText className="h-4 w-4 text-teal-600" /> AI transcript</div>
-          {d.transcript || d.textContent ? (
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <span className="flex items-center gap-2 text-sm font-semibold"><FileText className="h-4 w-4 text-teal-600" /> AI transcript{d.transcriptEditedAt ? <span className="text-[10px] font-normal text-muted-foreground">(edited)</span> : null}</span>
+            {!editing && (d.transcript || d.textContent) && !d._pending && (
+              <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => { setDraft(d.transcript || d.textContent || ''); setEditing(true) }}><Pencil className="h-3 w-3" /> Edit</Button>
+            )}
+          </div>
+          {editing ? (
+            <div className="space-y-2">
+              <Textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={8} className="text-sm" placeholder="Tidy the transcript before it's read into the care plan…" />
+              <div className="flex justify-end gap-2">
+                <Button variant="ghost" size="sm" onClick={() => setEditing(false)} disabled={saving}>Cancel</Button>
+                <Button size="sm" className="gap-1" onClick={saveTranscript} disabled={saving}>{saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} Save transcript</Button>
+              </div>
+            </div>
+          ) : d.transcript || d.textContent ? (
             <pre className="max-h-[40vh] overflow-auto whitespace-pre-wrap text-sm leading-relaxed text-foreground">{d.transcript || d.textContent}</pre>
           ) : d._pending ? (
             <p className="text-xs text-muted-foreground">Will transcribe automatically when you reconnect.</p>
@@ -1804,7 +1830,7 @@ function PatientDetail({ patient, onBack, refresh, onDelete, patchDetail }) {
 
   return (
     <div className="space-y-5">
-      <DocViewer open={viewerOpen} onOpenChange={setViewerOpen} documents={patient.documents || []} currentIndex={viewIndex} setCurrentIndex={setViewIndex} patientId={patient.id} />
+      <DocViewer open={viewerOpen} onOpenChange={setViewerOpen} documents={patient.documents || []} currentIndex={viewIndex} setCurrentIndex={setViewIndex} patientId={patient.id} refresh={refresh} />
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Button variant="ghost" onClick={onBack} className="gap-2 -ml-2 shrink-0"><ArrowLeft className="h-4 w-4" /> Back to shift</Button>
         <div className="flex items-center gap-2 shrink-0">
@@ -2113,31 +2139,6 @@ function SyncQueueDialog({ open, onOpenChange, online, syncing, onSyncNow }) {
 }
 
 
-function LoginScreen({ onLogin, busy }) {
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-b from-accent/30 to-background p-4">
-      <div className="w-full max-w-md rounded-2xl border bg-card p-8 shadow-sm">
-        <div className="mb-6 flex flex-col items-center text-center">
-          <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary text-primary-foreground">
-            <Stethoscope className="h-7 w-7" />
-          </div>
-          <h1 className="text-2xl font-bold tracking-tight">NurseCare</h1>
-          <p className="mt-1 text-sm text-muted-foreground">AI care-plan assistant for new grad nurses</p>
-        </div>
-        <div className="space-y-3 rounded-xl bg-muted/40 p-4 text-sm text-muted-foreground">
-          <p className="flex items-start gap-2"><HeartPulse className="mt-0.5 h-4 w-4 shrink-0 text-primary" /> Turn patient documents, photos &amp; voice handovers into structured cares, priorities &amp; ISBAR.</p>
-          <p className="flex items-start gap-2"><Shield className="mt-0.5 h-4 w-4 shrink-0 text-primary" /> Your patients are private to your account and never shared with other nurses.</p>
-        </div>
-        <Button className="mt-6 w-full gap-2" size="lg" onClick={onLogin} disabled={busy}>
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-          {busy ? 'Signing you in…' : 'Continue with Google'}
-        </Button>
-        <p className="mt-4 text-center text-[11px] text-muted-foreground">Sign in to keep patient information secure. Demo data only — not a substitute for clinical judgement.</p>
-      </div>
-    </div>
-  )
-}
-
 function App() {
   const [patients, setPatients] = useState([])
   const [loading, setLoading] = useState(true)
@@ -2153,53 +2154,6 @@ function App() {
   const [installPrompt, setInstallPrompt] = useState(null)
   const [isStandalone, setIsStandalone] = useState(false)
   const [showInstallTip, setShowInstallTip] = useState(false)
-  const [authUser, setAuthUser] = useState(undefined) // undefined=loading, null=logged out, object=logged in
-  const [authBusy, setAuthBusy] = useState(false)
-
-  // Auth bootstrap: process the Emergent #session_id callback once, else check the session.
-  useEffect(() => {
-    let cancelled = false
-    const boot = async () => {
-      try {
-        const hash = (typeof window !== 'undefined' ? window.location.hash : '').replace(/^#/, '')
-        const sid = new URLSearchParams(hash).get('session_id')
-        if (sid) {
-          setAuthBusy(true)
-          window.history.replaceState(null, '', window.location.pathname)
-          const res = await fetch('/api/auth/exchange', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ session_id: sid }) })
-          const data = await res.json().catch(() => ({}))
-          if (!cancelled) { setAuthUser(res.ok ? data.user : null); if (!res.ok) toast.error(data.error || 'Sign-in failed — please try again') }
-          setAuthBusy(false)
-          return
-        }
-        const me = await fetch('/api/auth/me', { credentials: 'include' }).then((r) => r.json()).catch(() => ({ user: null }))
-        if (!cancelled) setAuthUser(me.user || null)
-      } catch { if (!cancelled) setAuthUser(null) }
-    }
-    boot()
-    return () => { cancelled = true }
-  }, [])
-
-  const startLogin = () => {
-    const redirect = window.location.origin
-    window.location.assign(`https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirect)}`)
-  }
-
-  const purgeLocalData = async () => {
-    try { await clearQueue() } catch {}
-    try { if ('caches' in window) { const keys = await caches.keys(); await Promise.all(keys.map((k) => caches.delete(k))) } } catch {}
-    try { Object.keys(localStorage).filter((k) => k.startsWith('nursecare')).forEach((k) => localStorage.removeItem(k)) } catch {}
-  }
-
-  const logout = async () => {
-    setAuthBusy(true)
-    try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }) } catch {}
-    await purgeLocalData() // SEC-004: don't leave patient data cached on the device
-    setPatients([]); setSelectedId(null); setDetail(null)
-    setAuthUser(null)
-    setAuthBusy(false)
-    toast.success('Signed out')
-  }
 
   useEffect(() => {
     const set = () => setOnline(navigator.onLine)
@@ -2301,7 +2255,7 @@ function App() {
     try { const p = await api(`/patients/${id}`); setDetail(p) } catch (e) { toast.error(e.message) }
   }, [])
 
-  useEffect(() => { if (authUser) load() }, [load, authUser])
+  useEffect(() => { load() }, [load])
   useEffect(() => {
     if (selectedId) { setDetail(null); loadDetail(selectedId) }
     else setDetail(null)
@@ -2492,13 +2446,6 @@ function App() {
 
   const selected = !!selectedId
 
-  if (authUser === undefined) {
-    return <div className="flex min-h-screen items-center justify-center bg-gradient-to-b from-accent/30 to-background"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>
-  }
-  if (authUser === null) {
-    return <LoginScreen onLogin={startLogin} busy={authBusy} />
-  }
-
   return (
     <div className="min-h-screen bg-gradient-to-b from-accent/30 to-background">
       <TutorialDialog open={tutorialOpen} onOpenChange={setTutorialOpen} />
@@ -2537,17 +2484,6 @@ function App() {
             <Button variant="outline" size="sm" className="gap-2" onClick={() => setTutorialOpen(true)}>
               <BookOpen className="h-4 w-4" /> <span className="hidden sm:inline">Tutorial</span>
             </Button>
-            <div className="flex items-center gap-2 border-l pl-2">
-              {authUser?.picture ? (
-                <img src={authUser.picture} alt="" className="h-7 w-7 rounded-full" referrerPolicy="no-referrer" />
-              ) : (
-                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">{(authUser?.name || authUser?.email || 'N')[0].toUpperCase()}</div>
-              )}
-              <span className="hidden max-w-[120px] truncate text-xs font-medium md:inline" title={authUser?.email}>{authUser?.name || authUser?.email}</span>
-              <Button variant="ghost" size="sm" className="gap-1.5 text-muted-foreground" onClick={logout} disabled={authBusy} aria-label="Sign out">
-                <LogOut className="h-4 w-4" /> <span className="hidden sm:inline">Sign out</span>
-              </Button>
-            </div>
           </div>
         </div>
       </header>

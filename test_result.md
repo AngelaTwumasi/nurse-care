@@ -2339,3 +2339,29 @@ agent_communication:
       
       NO CRITICAL ISSUES FOUND. Backend authentication and per-user isolation are PRODUCTION-READY.
 
+
+#====================================================================================================
+# Google login REMOVED (per user request) + audio-in-ingest / transcript-edit / shared-handover
+#====================================================================================================
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      USER REQUESTED to remove the Google/Emergent login. Done:
+      - Backend: removed the auth 401 gate and all ownerId (per-user) scoping so every route is open again
+        (find({}), countDocuments(), findOne({id}), deleteOne({id}), share updateOne({id})). Verified via curl
+        WITHOUT any cookie: GET /patients 200, POST /sample creates, list works, delete works. The /auth/* and
+        /shared/* endpoints remain in code but dormant (auth.js untouched) for easy re-enable.
+      - Frontend: removed the LoginScreen, the auth bootstrap/#session_id handling, authUser state, the header
+        account + Sign out button, and the load() auth-gating; app opens directly to the dashboard. Verified via
+        screenshot (no "Continue with Google", dashboard shown, no Sign out).
+      NOTE/transparency: removing login re-opens SEC-001 (unauthenticated access to patient data) from the
+      security audit — this was the user's explicit choice.
+
+      Other features built this round (backend done + curl-verified; NOT yet reverted):
+      - Audio-in-ingest: POST /ingest transcribes audio docs first; a spoken ward-list auto-created 2 patients.
+      - Transcript editing: PUT /patients/:id/documents/:docId updates transcript+textContent; DocViewer has an
+        Edit UI (wired with refresh). Verified via curl.
+      - Shared handover: POST/DELETE /patients/:id/share + public GET /shared/:token (read-only single-patient
+        handover). Verified via curl. Frontend Share button + /shared/[token] page NOT yet built.
+

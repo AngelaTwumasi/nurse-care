@@ -64,14 +64,34 @@ async function handleRoute(request, { params }) {
       return json({ user: publicUser(u) })
     }
 
-    // ---- Everything below requires a signed-in nurse (per-user data isolation) ----
-    const user = await getUserFromRequest(request, db)
-    if (!user) return json({ error: 'Unauthorized' }, 401)
-    const ownerId = user.id
+    // ---- Shared handover (public, read-only, single patient by unguessable token) ----
+    if (seg[0] === 'shared' && seg[1] && method === 'GET') {
+      const p = await db.collection('patients').findOne({ shareToken: seg[1] })
+      if (!p) return json({ error: 'This handover link is invalid or has been revoked.' }, 404)
+      const ao = p.aiOutput || {}
+      const owner = await db.collection('users').findOne({ id: p.ownerId })
+      return json({
+        name: p.name, bed: p.bed, age: p.age, diagnosis: p.diagnosis,
+        handoverNote: p.handoverNote || null, handoverNoteAt: p.handoverNoteAt || null,
+        sharedBy: owner ? (owner.name || owner.email) : null,
+        sharedAt: p.sharedAt || null,
+        aiOutput: {
+          patientSummary: ao.patientSummary || null,
+          handoverHeader: ao.handoverHeader || null,
+          isbar: ao.isbar || null,
+          priorities: ao.priorities || [],
+          criticalActions: ao.criticalActions || [],
+          outstandingTasks: ao.outstandingTasks || [],
+          earlyWarning: ao.earlyWarning || null,
+          careSchedule: ao.careSchedule || [],
+          recommendations: ao.recommendations || [],
+        },
+      })
+    }
 
-    // ---- Patients collection ----
+    // ---- Patients collection (open access — login removed) ----
     if (route === '/patients' && method === 'GET') {
-      const patients = await db.collection('patients').find({ ownerId }).sort({ createdAt: 1 }).toArray()
+      const patients = await db.collection('patients').find({}).sort({ createdAt: 1 }).toArray()
       return json(patients.map(({ _id, documents, ...rest }) => ({
         ...rest,
         documents: (documents || []).map((d) => ({ id: d.id, name: d.name, category: d.category, kind: d.kind, mimeType: d.mimeType })),
@@ -79,21 +99,20 @@ async function handleRoute(request, { params }) {
     }
 
     if (route === '/sample' && method === 'POST') {
-      const count = await db.collection('patients').countDocuments({ ownerId })
+      const count = await db.collection('patients').countDocuments()
       if (count >= MAX_PATIENTS) {
         return json({ error: `Patient load is full (max ${MAX_PATIENTS} patients). Discharge one first.` }, 400)
       }
       let sampleType = 'chf'
       try { const _b = await request.json(); if (_b && _b.type) sampleType = _b.type } catch {}
       const patient = buildSamplePatient(sampleType)
-      patient.ownerId = ownerId
       await db.collection('patients').insertOne(patient)
       const { _id, ...clean } = patient
       return json(clean)
     }
 
     if (route === '/patients' && method === 'POST') {
-      const count = await db.collection('patients').countDocuments({ ownerId })
+      const count = await db.collection('patients').countDocuments()
       if (count >= MAX_PATIENTS) {
         return json({ error: `Patient load is full (max ${MAX_PATIENTS} patients per shift). Discharge a patient to add a new one.` }, 400)
       }
@@ -103,7 +122,6 @@ async function handleRoute(request, { params }) {
       }
       const patient = {
         id: uuidv4(),
-        ownerId,
         name: body.name.trim(),
         bed: body.bed || '',
         age: body.age || '',
@@ -123,13 +141,27 @@ async function handleRoute(request, { params }) {
       const body = await request.json()
       const documents = Array.isArray(body.documents) ? body.documents : []
       if (!documents.length) return json({ error: 'No documents provided' }, 400)
-      const existing = await db.collection('patients').countDocuments({ ownerId })
+      const existing = await db.collection('patients').countDocuments()
       const slots = MAX_PATIENTS - existing
       if (slots <= 0) return json({ error: `Patient load is full (max ${MAX_PATIENTS} patients). Discharge a patient first.` }, 400)
 
+      // #2 Audio-in-ingest: transcribe any audio recordings up-front so a spoken ward-list
+      // can auto-detect multiple patients, and the transcript is stored on each created doc.
+      const transcripts = {}
+      for (let i = 0; i < documents.length; i++) {
+        const doc = documents[i]
+        const mt = (doc.mimeType || '').toLowerCase()
+        if (doc.kind !== 'text' && mt.startsWith('audio/') && doc.dataUrl) {
+          try { transcripts[i] = await transcribeAudio(doc.dataUrl) } catch (e) { console.error('ingest transcribe', e?.message) }
+        }
+      }
+      const identifyDocs = documents.map((doc, i) => (transcripts[i] != null
+        ? { name: doc.name, category: doc.category, kind: 'text', textContent: `[AUDIO WARD-LIST / HANDOVER TRANSCRIPT]\n${transcripts[i]}` }
+        : doc))
+
       let detected
       try {
-        detected = await identifyPatients(documents)
+        detected = await identifyPatients(identifyDocs)
       } catch (e) {
         return json({ error: e.message || 'Could not read the uploaded document' }, 400)
       }
@@ -140,7 +172,8 @@ async function handleRoute(request, { params }) {
       for (const d of toCreate) {
         const pid = uuidv4()
         const docsMeta = []
-        for (const doc of documents) {
+        for (let di = 0; di < documents.length; di++) {
+          const doc = documents[di]
           const docId = uuidv4()
           const kind = doc.kind || (doc.textContent ? 'text' : 'file')
           let hasFile = false
@@ -151,11 +184,11 @@ async function handleRoute(request, { params }) {
             }
             try { hasFile = await storeFile(db, docId, pid, doc.dataUrl, doc.mimeType) } catch (e) { console.error('ingest storeFile', e?.message) }
           }
-          docsMeta.push({ id: docId, name: doc.name || 'Untitled', category: doc.category || 'other', kind, mimeType: doc.mimeType || null, dataUrl: null, hasFile, textContent: doc.textContent || null, uploadedAt: new Date() })
+          const tr = transcripts[di] ?? null
+          docsMeta.push({ id: docId, name: doc.name || 'Untitled', category: doc.category || 'other', kind, mimeType: doc.mimeType || null, dataUrl: null, hasFile, textContent: doc.textContent || tr || null, transcript: tr, transcribedAt: tr ? new Date() : null, uploadedAt: new Date() })
         }
         const patient = {
           id: pid,
-          ownerId,
           name: d.name || 'Unnamed',
           bed: d.bed || '',
           age: d.age || '',
@@ -174,7 +207,7 @@ async function handleRoute(request, { params }) {
     }
     if (seg[0] === 'patients' && seg[1]) {
       const id = seg[1]
-      const patient = await db.collection('patients').findOne({ id, ownerId })
+      const patient = await db.collection('patients').findOne({ id })
       if (!patient && !(seg.length === 2 && method === 'DELETE')) {
         return json({ error: 'Patient not found' }, 404)
       }
@@ -206,7 +239,23 @@ async function handleRoute(request, { params }) {
         }
         if (method === 'DELETE') {
           for (const d of (patient?.documents || [])) { if (d.kind !== 'text') { try { await deleteFile(db, d.id) } catch {} } }
-          await db.collection('patients').deleteOne({ id, ownerId })
+          await db.collection('patients').deleteOne({ id })
+          return json({ success: true })
+        }
+      }
+
+      // /patients/:id/share -> create/revoke a read-only shareable handover link (cover breaks)
+      if (seg[2] === 'share') {
+        if (method === 'POST') {
+          let token = patient.shareToken
+          if (!token) {
+            token = `${uuidv4()}${uuidv4()}`.replace(/-/g, '')
+            await db.collection('patients').updateOne({ id }, { $set: { shareToken: token, sharedAt: new Date() } })
+          }
+          return json({ shareToken: token, path: `/shared/${token}` })
+        }
+        if (method === 'DELETE') {
+          await db.collection('patients').updateOne({ id }, { $unset: { shareToken: '', sharedAt: '' } })
           return json({ success: true })
         }
       }
@@ -266,7 +315,22 @@ async function handleRoute(request, { params }) {
           const cleanDocs = (documents || []).map(({ dataUrl, ...doc }) => ({ ...doc, hasFile: doc.hasFile || (doc.kind !== 'text' && !!dataUrl) }))
           return json({ ...rest, documents: cleanDocs })
         }
-        // GET .../documents/:docId/content -> stream the file bytes
+        // PUT .../documents/:docId -> edit a document's transcript/text (e.g. tidy an audio transcript)
+        if (seg.length === 4 && method === 'PUT') {
+          const docId = seg[3]
+          const body = await request.json().catch(() => ({}))
+          const text = typeof body.transcript === 'string' ? body.transcript : (typeof body.textContent === 'string' ? body.textContent : null)
+          if (text == null) return json({ error: 'Nothing to update' }, 400)
+          const r = await db.collection('patients').updateOne(
+            { id, 'documents.id': docId },
+            { $set: { 'documents.$.transcript': text, 'documents.$.textContent': text, 'documents.$.transcriptEditedAt': new Date() } }
+          )
+          if (!r.matchedCount) return json({ error: 'Document not found' }, 404)
+          const updated = await db.collection('patients').findOne({ id })
+          const { _id, documents, ...rest } = updated
+          const cleanDocs = (documents || []).map(({ dataUrl, ...doc }) => ({ ...doc, hasFile: doc.hasFile || (doc.kind !== 'text' && !!dataUrl) }))
+          return json({ ...rest, documents: cleanDocs })
+        }
         if (seg.length === 5 && seg[4] === 'content' && method === 'GET') {
           const docId = seg[3]
           const doc = (patient.documents || []).find((d) => d.id === docId)

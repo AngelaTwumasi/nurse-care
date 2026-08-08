@@ -27,7 +27,7 @@ import {
   CheckCircle2, FileUp, StickyNote, X, Download, Copy, Clock, TrendingUp,
   TrendingDown, Minus, Gauge, Siren, Volume2, Square, LayoutGrid,
   Dumbbell, Apple, UserRound, CalendarClock, GripVertical, Users, ArrowDownWideNarrow, Printer, Search, Camera, WifiOff, Pencil, Mic,
-  RefreshCw, CloudUpload,
+  RefreshCw, CloudUpload, LogOut, Shield,
 } from 'lucide-react'
 import { flushQueue, queueCount, subscribeQueue, getAllOps, removeOp, clearQueue } from './offline-queue'
 import { Switch } from '@/components/ui/switch'
@@ -2113,6 +2113,31 @@ function SyncQueueDialog({ open, onOpenChange, online, syncing, onSyncNow }) {
 }
 
 
+function LoginScreen({ onLogin, busy }) {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-gradient-to-b from-accent/30 to-background p-4">
+      <div className="w-full max-w-md rounded-2xl border bg-card p-8 shadow-sm">
+        <div className="mb-6 flex flex-col items-center text-center">
+          <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary text-primary-foreground">
+            <Stethoscope className="h-7 w-7" />
+          </div>
+          <h1 className="text-2xl font-bold tracking-tight">NurseCare</h1>
+          <p className="mt-1 text-sm text-muted-foreground">AI care-plan assistant for new grad nurses</p>
+        </div>
+        <div className="space-y-3 rounded-xl bg-muted/40 p-4 text-sm text-muted-foreground">
+          <p className="flex items-start gap-2"><HeartPulse className="mt-0.5 h-4 w-4 shrink-0 text-primary" /> Turn patient documents, photos &amp; voice handovers into structured cares, priorities &amp; ISBAR.</p>
+          <p className="flex items-start gap-2"><Shield className="mt-0.5 h-4 w-4 shrink-0 text-primary" /> Your patients are private to your account and never shared with other nurses.</p>
+        </div>
+        <Button className="mt-6 w-full gap-2" size="lg" onClick={onLogin} disabled={busy}>
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          {busy ? 'Signing you in…' : 'Continue with Google'}
+        </Button>
+        <p className="mt-4 text-center text-[11px] text-muted-foreground">Sign in to keep patient information secure. Demo data only — not a substitute for clinical judgement.</p>
+      </div>
+    </div>
+  )
+}
+
 function App() {
   const [patients, setPatients] = useState([])
   const [loading, setLoading] = useState(true)
@@ -2128,6 +2153,53 @@ function App() {
   const [installPrompt, setInstallPrompt] = useState(null)
   const [isStandalone, setIsStandalone] = useState(false)
   const [showInstallTip, setShowInstallTip] = useState(false)
+  const [authUser, setAuthUser] = useState(undefined) // undefined=loading, null=logged out, object=logged in
+  const [authBusy, setAuthBusy] = useState(false)
+
+  // Auth bootstrap: process the Emergent #session_id callback once, else check the session.
+  useEffect(() => {
+    let cancelled = false
+    const boot = async () => {
+      try {
+        const hash = (typeof window !== 'undefined' ? window.location.hash : '').replace(/^#/, '')
+        const sid = new URLSearchParams(hash).get('session_id')
+        if (sid) {
+          setAuthBusy(true)
+          window.history.replaceState(null, '', window.location.pathname)
+          const res = await fetch('/api/auth/exchange', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ session_id: sid }) })
+          const data = await res.json().catch(() => ({}))
+          if (!cancelled) { setAuthUser(res.ok ? data.user : null); if (!res.ok) toast.error(data.error || 'Sign-in failed — please try again') }
+          setAuthBusy(false)
+          return
+        }
+        const me = await fetch('/api/auth/me', { credentials: 'include' }).then((r) => r.json()).catch(() => ({ user: null }))
+        if (!cancelled) setAuthUser(me.user || null)
+      } catch { if (!cancelled) setAuthUser(null) }
+    }
+    boot()
+    return () => { cancelled = true }
+  }, [])
+
+  const startLogin = () => {
+    const redirect = window.location.origin
+    window.location.assign(`https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirect)}`)
+  }
+
+  const purgeLocalData = async () => {
+    try { await clearQueue() } catch {}
+    try { if ('caches' in window) { const keys = await caches.keys(); await Promise.all(keys.map((k) => caches.delete(k))) } } catch {}
+    try { Object.keys(localStorage).filter((k) => k.startsWith('nursecare')).forEach((k) => localStorage.removeItem(k)) } catch {}
+  }
+
+  const logout = async () => {
+    setAuthBusy(true)
+    try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }) } catch {}
+    await purgeLocalData() // SEC-004: don't leave patient data cached on the device
+    setPatients([]); setSelectedId(null); setDetail(null)
+    setAuthUser(null)
+    setAuthBusy(false)
+    toast.success('Signed out')
+  }
 
   useEffect(() => {
     const set = () => setOnline(navigator.onLine)
@@ -2229,7 +2301,7 @@ function App() {
     try { const p = await api(`/patients/${id}`); setDetail(p) } catch (e) { toast.error(e.message) }
   }, [])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => { if (authUser) load() }, [load, authUser])
   useEffect(() => {
     if (selectedId) { setDetail(null); loadDetail(selectedId) }
     else setDetail(null)
@@ -2420,6 +2492,13 @@ function App() {
 
   const selected = !!selectedId
 
+  if (authUser === undefined) {
+    return <div className="flex min-h-screen items-center justify-center bg-gradient-to-b from-accent/30 to-background"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>
+  }
+  if (authUser === null) {
+    return <LoginScreen onLogin={startLogin} busy={authBusy} />
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-accent/30 to-background">
       <TutorialDialog open={tutorialOpen} onOpenChange={setTutorialOpen} />
@@ -2458,6 +2537,17 @@ function App() {
             <Button variant="outline" size="sm" className="gap-2" onClick={() => setTutorialOpen(true)}>
               <BookOpen className="h-4 w-4" /> <span className="hidden sm:inline">Tutorial</span>
             </Button>
+            <div className="flex items-center gap-2 border-l pl-2">
+              {authUser?.picture ? (
+                <img src={authUser.picture} alt="" className="h-7 w-7 rounded-full" referrerPolicy="no-referrer" />
+              ) : (
+                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">{(authUser?.name || authUser?.email || 'N')[0].toUpperCase()}</div>
+              )}
+              <span className="hidden max-w-[120px] truncate text-xs font-medium md:inline" title={authUser?.email}>{authUser?.name || authUser?.email}</span>
+              <Button variant="ghost" size="sm" className="gap-1.5 text-muted-foreground" onClick={logout} disabled={authBusy} aria-label="Sign out">
+                <LogOut className="h-4 w-4" /> <span className="hidden sm:inline">Sign out</span>
+              </Button>
+            </div>
           </div>
         </div>
       </header>

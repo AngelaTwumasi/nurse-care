@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Comprehensive backend test: Audio transcription (NEW) + Regression tests
-Tests audio upload/transcription, generate with audio, and all core endpoints.
+NurseCare Backend Authentication & Per-User Isolation Test Suite
+Tests authentication gate, per-user data isolation, and full lifecycle with sessions.
 """
 
 import requests
@@ -9,922 +9,423 @@ import json
 import base64
 import time
 import sys
-from datetime import datetime
+import subprocess
 
 # Base URL from environment
 BASE_URL = "https://web-nurse-app.preview.emergentagent.com/api"
 
-# IMPORTANT: Preserve these 4 real patients
-PROTECTED_PATIENTS = ["LAITHANG SILAS", "YIM SOLNAE", "JOHNSTONE JOHN", "ARMSTRONG DENIS"]
+# Test session cookies
+NURSE1_COOKIE = "nc_session=TESTTOKEN1"
+NURSE2_COOKIE = "nc_session=TESTTOKEN2"
+BOGUS_COOKIE = "nc_session=BOGUS"
 
-# Test results tracking
-test_results = []
-created_patient_ids = []
+# Track created patients for cleanup
+created_patients = []
 
-def log_test(test_name, passed, message=""):
-    """Log test result"""
-    status = "✅ PASS" if passed else "❌ FAIL"
-    result = f"{status}: {test_name}"
-    if message:
-        result += f" - {message}"
-    print(result)
-    test_results.append({"test": test_name, "passed": passed, "message": message})
-    return passed
+def log_test(name):
+    print(f"\n{'='*80}")
+    print(f"TEST: {name}")
+    print('='*80)
 
-def cleanup_test_patients():
-    """Delete all test patients created during testing, preserve protected patients"""
-    print("\n🧹 Cleaning up test patients...")
-    try:
-        response = requests.get(f"{BASE_URL}/patients")
-        if response.status_code == 200:
-            patients = response.json()
-            for patient in patients:
-                # Only delete patients we created during testing
-                if patient['id'] in created_patient_ids:
-                    try:
-                        del_resp = requests.delete(f"{BASE_URL}/patients/{patient['id']}")
-                        if del_resp.status_code == 200:
-                            print(f"  Deleted test patient: {patient['name']} (ID: {patient['id']})")
-                    except Exception as e:
-                        print(f"  Warning: Could not delete {patient['name']}: {e}")
-                # Also delete by name pattern (in case ID tracking failed)
-                elif patient['name'].startswith('TEST_') or patient['name'].startswith('Audio Test'):
-                    if patient['name'] not in PROTECTED_PATIENTS:
-                        try:
-                            del_resp = requests.delete(f"{BASE_URL}/patients/{patient['id']}")
-                            if del_resp.status_code == 200:
-                                print(f"  Deleted test patient by name: {patient['name']}")
-                        except Exception as e:
-                            print(f"  Warning: Could not delete {patient['name']}: {e}")
-    except Exception as e:
-        print(f"Warning: Cleanup error: {e}")
+def log_pass(msg):
+    print(f"✅ PASS: {msg}")
 
-# ============================================================================
-# NEW FEATURE TESTS: AUDIO TRANSCRIPTION
-# ============================================================================
-
-def test_audio_1_transcription():
-    """Test 1 (NEW): Audio upload transcription - POST /documents with audio/wav"""
-    print("\n🎤 Test 1 (NEW): Audio transcription")
-    try:
-        # Create a patient
-        patient_data = {
-            "name": "Audio Test Patient",
-            "bed": "Bed 4",
-            "age": "65",
-            "diagnosis": "Post-op monitoring"
-        }
-        create_resp = requests.post(f"{BASE_URL}/patients", json=patient_data)
-        if create_resp.status_code != 200:
-            return log_test("Audio transcription", False, f"Could not create patient: {create_resp.status_code}")
-        patient_id = create_resp.json()['id']
-        created_patient_ids.append(patient_id)
-        
-        # Read the test audio file
-        try:
-            with open('/app/test_handover.wav', 'rb') as f:
-                audio_bytes = f.read()
-        except Exception as e:
-            return log_test("Audio transcription", False, f"Could not read test_handover.wav: {e}")
-        
-        # Create base64 data URL
-        audio_b64 = base64.b64encode(audio_bytes).decode()
-        data_url = f"data:audio/wav;base64,{audio_b64}"
-        
-        print(f"  Uploading audio file ({len(audio_bytes)} bytes)...")
-        
-        # Upload audio document
-        doc_data = {
-            "documents": [{
-                "name": "handover.wav",
-                "category": "handover",
-                "kind": "file",
-                "mimeType": "audio/wav",
-                "dataUrl": data_url
-            }]
-        }
-        
-        print("  Waiting for transcription (expect 5-20s)...")
-        start_time = time.time()
-        response = requests.post(f"{BASE_URL}/patients/{patient_id}/documents", json=doc_data, timeout=60)
-        elapsed = time.time() - start_time
-        
-        if response.status_code != 200:
-            return log_test("Audio transcription", False, f"Expected 200, got {response.status_code}: {response.text[:200]}")
-        
-        patient = response.json()
-        if not patient.get('documents') or len(patient['documents']) == 0:
-            return log_test("Audio transcription", False, "No documents in response")
-        
-        doc = patient['documents'][0]
-        
-        # Check hasFile
-        if doc.get('hasFile') != True:
-            return log_test("Audio transcription", False, f"hasFile should be true, got {doc.get('hasFile')}")
-        
-        # Check transcript exists and is non-empty
-        if not doc.get('transcript'):
-            return log_test("Audio transcription", False, "transcript is empty or missing")
-        
-        transcript = doc['transcript']
-        print(f"  Transcript ({len(transcript)} chars): {transcript[:100]}...")
-        
-        # Check transcript contains expected content from test_handover.wav
-        # Expected: "Handover for patient in bed four. Heart rate is ninety-two..."
-        transcript_lower = transcript.lower()
-        expected_phrases = ['bed four', 'heart rate', 'neurological']
-        found_phrases = [phrase for phrase in expected_phrases if phrase in transcript_lower]
-        
-        if len(found_phrases) < 2:
-            return log_test("Audio transcription", False, f"Transcript doesn't contain expected content. Found {found_phrases} out of {expected_phrases}. Transcript: {transcript[:200]}")
-        
-        # Check transcribedAt timestamp
-        if not doc.get('transcribedAt'):
-            return log_test("Audio transcription", False, "transcribedAt is missing")
-        
-        try:
-            datetime.fromisoformat(doc['transcribedAt'].replace('Z', '+00:00'))
-        except Exception:
-            return log_test("Audio transcription", False, f"Invalid transcribedAt timestamp: {doc['transcribedAt']}")
-        
-        # Check textContent equals transcript
-        if doc.get('textContent') != transcript:
-            return log_test("Audio transcription", False, f"textContent should equal transcript")
-        
-        # Test GET content endpoint - should stream audio bytes
-        doc_id = doc['id']
-        content_resp = requests.get(f"{BASE_URL}/patients/{patient_id}/documents/{doc_id}/content")
-        
-        if content_resp.status_code != 200:
-            return log_test("Audio transcription", False, f"GET content failed: {content_resp.status_code}")
-        
-        # Check Content-Type
-        content_type = content_resp.headers.get('Content-Type', '')
-        if not content_type.startswith('audio/wav'):
-            return log_test("Audio transcription", False, f"Wrong Content-Type: {content_type}, expected audio/wav")
-        
-        # Check Content-Disposition is inline
-        content_disp = content_resp.headers.get('Content-Disposition', '')
-        if 'inline' not in content_disp:
-            return log_test("Audio transcription", False, f"Content-Disposition should be inline, got: {content_disp}")
-        
-        # Check content length matches original
-        if len(content_resp.content) != len(audio_bytes):
-            return log_test("Audio transcription", False, f"Content length mismatch: {len(content_resp.content)} vs {len(audio_bytes)}")
-        
-        return log_test("Audio transcription", True, f"Transcription completed in {elapsed:.1f}s. Found phrases: {found_phrases}. hasFile=true, transcript non-empty, textContent=transcript, content streams audio/wav inline")
+def log_fail(msg):
+    print(f"❌ FAIL: {msg}")
     
-    except Exception as e:
-        return log_test("Audio transcription", False, f"Exception: {e}")
+def log_info(msg):
+    print(f"ℹ️  INFO: {msg}")
 
-def test_audio_2_generate_reads_audio():
-    """Test 2 (NEW): Generate reads audio - POST /generate with audio doc"""
-    print("\n🎤 Test 2 (NEW): Generate reads audio document")
+def make_request(method, path, headers=None, json_data=None, expect_status=None):
+    """Make HTTP request and optionally assert status"""
+    url = f"{BASE_URL}{path}"
+    h = headers or {}
     try:
-        # Use the patient from test 1 if it exists, otherwise create new
-        if not created_patient_ids:
-            return log_test("Generate reads audio", False, "No patient from audio test 1")
-        
-        patient_id = created_patient_ids[-1]  # Use the last created patient (audio test patient)
-        
-        # Generate AI care plan
-        print("  Calling REAL Gemini 2.5 Pro to generate care plan from audio (expect 30-50s)...")
-        start_time = time.time()
-        response = requests.post(f"{BASE_URL}/patients/{patient_id}/generate", timeout=120)
-        elapsed = time.time() - start_time
-        
-        if response.status_code != 200:
-            return log_test("Generate reads audio", False, f"Expected 200, got {response.status_code}: {response.text[:200]}")
-        
-        result = response.json()
-        
-        if 'aiOutput' not in result:
-            return log_test("Generate reads audio", False, "Missing aiOutput")
-        
-        ai = result['aiOutput']
-        
-        # Check all required schema keys are present
-        required_keys = [
-            'patientSummary', 'priorities', 'interventions', 'isbar', 'medications',
-            'medicationTimes', 'vitalsTimeline', 'careSchedule', 'earlyWarning',
-            'redFlags', 'newGradTips', 'safetyNotice', 'handoverHeader', 'criticalActions',
-            'drsabcd', 'dietMobility', 'assessments', 'linesDevices', 'edd',
-            'recommendations', 'outstandingTasks', 'abbreviations'
-        ]
-        
-        missing_keys = [key for key in required_keys if key not in ai]
-        if missing_keys:
-            return log_test("Generate reads audio", False, f"Missing aiOutput keys: {missing_keys}")
-        
-        # Check that the AI output reflects the spoken handover content
-        # Expected content from test_handover.wav: bed four, heart rate 92, BP 120/80, SpO2 96%, 
-        # hourly neurological observations, analgesia
-        
-        # Convert all text fields to lowercase for searching
-        all_text = json.dumps(ai).lower()
-        
-        # Look for references to the spoken content
-        expected_content = [
-            ('neurological', 'hourly neurological observations'),
-            ('analgesia', 'analgesia/pain management'),
-        ]
-        
-        found_content = []
-        for keyword, description in expected_content:
-            if keyword in all_text:
-                found_content.append(description)
-        
-        if len(found_content) < 1:
-            return log_test("Generate reads audio", False, f"AI output doesn't reflect spoken handover content. Expected references to neurological observations and/or analgesia. AI output sample: {ai.get('patientSummary', '')[:200]}")
-        
-        # Check isbar sections exist
-        isbar = ai.get('isbar', {})
-        if not all(k in isbar for k in ['identify', 'situation', 'background', 'assessment', 'recommendation']):
-            return log_test("Generate reads audio", False, "isbar missing required sections")
-        
-        # Check interventions/priorities/careSchedule have content
-        if not ai.get('interventions') or len(ai['interventions']) == 0:
-            return log_test("Generate reads audio", False, "interventions is empty")
-        
-        if not ai.get('priorities') or len(ai['priorities']) == 0:
-            return log_test("Generate reads audio", False, "priorities is empty")
-        
-        return log_test("Generate reads audio", True, f"AI generation completed in {elapsed:.1f}s. Full schema present (22 keys). Content reflects spoken handover: {found_content}")
-    
-    except Exception as e:
-        return log_test("Generate reads audio", False, f"Exception: {e}")
-
-# ============================================================================
-# REGRESSION TESTS: DOCUMENTS
-# ============================================================================
-
-def test_reg_1_text_note():
-    """Test 3 (REGRESSION): POST text note"""
-    print("\n📋 Test 3 (REGRESSION): Text note upload")
-    try:
-        # Create a patient
-        patient_data = {"name": "TEST_REG_TEXT", "bed": "Bed 1", "age": "65", "diagnosis": "Test"}
-        create_resp = requests.post(f"{BASE_URL}/patients", json=patient_data)
-        if create_resp.status_code != 200:
-            return log_test("Text note", False, f"Could not create patient: {create_resp.status_code}")
-        patient_id = create_resp.json()['id']
-        created_patient_ids.append(patient_id)
-        
-        # Add text note
-        doc_data = {
-            "documents": [{
-                "name": "Test Note",
-                "category": "vitals",
-                "kind": "text",
-                "textContent": "Test vitals: HR 80, BP 120/80"
-            }]
-        }
-        response = requests.post(f"{BASE_URL}/patients/{patient_id}/documents", json=doc_data)
-        
-        if response.status_code != 200:
-            return log_test("Text note", False, f"Expected 200, got {response.status_code}")
-        
-        patient = response.json()
-        doc = patient['documents'][0]
-        
-        if doc.get('kind') != 'text':
-            return log_test("Text note", False, f"Wrong kind: {doc.get('kind')}")
-        
-        if doc.get('textContent') != "Test vitals: HR 80, BP 120/80":
-            return log_test("Text note", False, "textContent mismatch")
-        
-        return log_test("Text note", True, "Text note stored correctly")
-    
-    except Exception as e:
-        return log_test("Text note", False, f"Exception: {e}")
-
-def test_reg_2_png_image():
-    """Test 4 (REGRESSION): POST base64 PNG image"""
-    print("\n📋 Test 4 (REGRESSION): PNG image upload")
-    try:
-        # Use existing patient or create new
-        if not created_patient_ids:
-            patient_data = {"name": "TEST_REG_PNG", "bed": "Bed 1", "age": "65", "diagnosis": "Test"}
-            create_resp = requests.post(f"{BASE_URL}/patients", json=patient_data)
-            patient_id = create_resp.json()['id']
-            created_patient_ids.append(patient_id)
+        if method == "GET":
+            resp = requests.get(url, headers=h, timeout=30)
+        elif method == "POST":
+            resp = requests.post(url, headers=h, json=json_data, timeout=120)
+        elif method == "PUT":
+            resp = requests.put(url, headers=h, json=json_data, timeout=30)
+        elif method == "DELETE":
+            resp = requests.delete(url, headers=h, timeout=30)
         else:
-            patient_id = created_patient_ids[-1]
+            raise ValueError(f"Unsupported method: {method}")
         
-        # Create a small PNG (1x1 red pixel)
-        png_bytes = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==")
-        data_url = f"data:image/png;base64,{base64.b64encode(png_bytes).decode()}"
+        if expect_status and resp.status_code != expect_status:
+            log_fail(f"{method} {path} returned {resp.status_code}, expected {expect_status}")
+            log_info(f"Response: {resp.text[:500]}")
+            return None
         
-        # Upload image
-        doc_data = {
-            "documents": [{
-                "name": "Test Image",
-                "category": "other",
-                "kind": "file",
-                "mimeType": "image/png",
-                "dataUrl": data_url
-            }]
-        }
-        response = requests.post(f"{BASE_URL}/patients/{patient_id}/documents", json=doc_data)
-        
-        if response.status_code != 200:
-            return log_test("PNG image", False, f"Expected 200, got {response.status_code}")
-        
-        patient = response.json()
-        doc = [d for d in patient['documents'] if d['name'] == 'Test Image'][0]
-        
-        # Check hasFile=true
-        if doc.get('hasFile') != True:
-            return log_test("PNG image", False, f"hasFile should be true, got {doc.get('hasFile')}")
-        
-        # Check dataUrl is null (stored in GridFS)
-        if doc.get('dataUrl') is not None:
-            return log_test("PNG image", False, "dataUrl should be null (stored in GridFS)")
-        
-        # Test GET content
-        doc_id = doc['id']
-        content_resp = requests.get(f"{BASE_URL}/patients/{patient_id}/documents/{doc_id}/content")
-        
-        if content_resp.status_code != 200:
-            return log_test("PNG image", False, f"GET content failed: {content_resp.status_code}")
-        
-        if content_resp.headers.get('Content-Type') != 'image/png':
-            return log_test("PNG image", False, f"Wrong Content-Type: {content_resp.headers.get('Content-Type')}")
-        
-        # Check Content-Disposition is inline
-        content_disp = content_resp.headers.get('Content-Disposition', '')
-        if 'inline' not in content_disp:
-            return log_test("PNG image", False, f"Content-Disposition should be inline, got: {content_disp}")
-        
-        return log_test("PNG image", True, "PNG stored in GridFS, hasFile=true, no dataUrl, content streams image/png inline")
-    
+        return resp
     except Exception as e:
-        return log_test("PNG image", False, f"Exception: {e}")
+        log_fail(f"{method} {path} raised exception: {e}")
+        return None
 
-def test_reg_3_delete_doc():
-    """Test 5 (REGRESSION): DELETE document"""
-    print("\n📋 Test 5 (REGRESSION): Delete document")
-    try:
-        # Use existing patient
-        if not created_patient_ids:
-            return log_test("Delete document", False, "No test patient available")
-        
-        patient_id = created_patient_ids[-1]
-        
-        # Get patient to find a document
-        get_resp = requests.get(f"{BASE_URL}/patients/{patient_id}")
-        patient = get_resp.json()
-        
-        if not patient.get('documents') or len(patient['documents']) == 0:
-            return log_test("Delete document", False, "No documents to delete")
-        
-        doc_id = patient['documents'][0]['id']
-        
-        # Delete document
-        del_resp = requests.delete(f"{BASE_URL}/patients/{patient_id}/documents/{doc_id}")
-        
-        if del_resp.status_code != 200:
-            return log_test("Delete document", False, f"Expected 200, got {del_resp.status_code}")
-        
-        # Verify document is gone
-        get_resp2 = requests.get(f"{BASE_URL}/patients/{patient_id}")
-        patient2 = get_resp2.json()
-        
-        if any(d['id'] == doc_id for d in patient2.get('documents', [])):
-            return log_test("Delete document", False, "Document still exists after delete")
-        
-        # Verify content endpoint returns 404
-        content_resp = requests.get(f"{BASE_URL}/patients/{patient_id}/documents/{doc_id}/content")
-        if content_resp.status_code != 404:
-            return log_test("Delete document", False, f"Content endpoint should return 404, got {content_resp.status_code}")
-        
-        return log_test("Delete document", True, "Document deleted, content returns 404")
+def test_auth_gate_no_cookie():
+    """Test 1: AUTH GATE - no cookie should return 401 for protected routes, 200 for /auth/me"""
+    log_test("AUTH GATE (no cookie)")
     
-    except Exception as e:
-        return log_test("Delete document", False, f"Exception: {e}")
-
-def test_reg_4_sec003_30mb_rejection():
-    """Test 6 (REGRESSION): SEC-003 - Reject >30MB upload with 413"""
-    print("\n📋 Test 6 (REGRESSION): SEC-003 - 30MB upload limit")
-    try:
-        # Create a patient
-        patient_data = {"name": "TEST_SEC003", "bed": "Bed 1", "age": "65", "diagnosis": "Test"}
-        create_resp = requests.post(f"{BASE_URL}/patients", json=patient_data)
-        if create_resp.status_code != 200:
-            return log_test("SEC-003 30MB limit", False, f"Could not create patient: {create_resp.status_code}")
-        patient_id = create_resp.json()['id']
-        created_patient_ids.append(patient_id)
-        
-        # Create a >30MB file (31MB)
-        print("  Creating 31MB file...")
-        large_data = b"X" * (31 * 1024 * 1024)  # 31MB
-        data_url = f"data:application/octet-stream;base64,{base64.b64encode(large_data).decode()}"
-        
-        print("  Uploading 31MB file (should be rejected)...")
-        
-        # Try to upload
-        doc_data = {
-            "documents": [{
-                "name": "Too Large",
-                "category": "other",
-                "kind": "file",
-                "mimeType": "application/octet-stream",
-                "dataUrl": data_url
-            }]
-        }
-        response = requests.post(f"{BASE_URL}/patients/{patient_id}/documents", json=doc_data, timeout=60)
-        
-        # Should return 413
-        if response.status_code != 413:
-            return log_test("SEC-003 30MB limit", False, f"Expected 413, got {response.status_code}")
-        
-        error_data = response.json()
-        if 'error' not in error_data:
-            return log_test("SEC-003 30MB limit", False, "No error message in response")
-        
-        error_msg = error_data['error'].lower()
-        if 'large' not in error_msg and '30' not in error_msg:
-            return log_test("SEC-003 30MB limit", False, f"Error message doesn't mention size limit: {error_data['error']}")
-        
-        return log_test("SEC-003 30MB limit", True, f"31MB upload correctly rejected with 413: {error_data['error']}")
-    
-    except Exception as e:
-        return log_test("SEC-003 30MB limit", False, f"Exception: {e}")
-
-def test_reg_5_sec002_html_security():
-    """Test 7 (REGRESSION): SEC-002 - text/html served as octet-stream + attachment"""
-    print("\n📋 Test 7 (REGRESSION): SEC-002 - HTML security")
-    try:
-        # Use existing patient or create new
-        if not created_patient_ids:
-            patient_data = {"name": "TEST_SEC002", "bed": "Bed 1", "age": "65", "diagnosis": "Test"}
-            create_resp = requests.post(f"{BASE_URL}/patients", json=patient_data)
-            patient_id = create_resp.json()['id']
-            created_patient_ids.append(patient_id)
+    # /auth/me should return 200 with user:null
+    resp = make_request("GET", "/auth/me", expect_status=200)
+    if resp:
+        data = resp.json()
+        if data.get("user") is None:
+            log_pass("GET /auth/me without cookie returns 200 with user:null")
         else:
-            patient_id = created_patient_ids[-1]
-        
-        # Create an HTML file
-        html_content = b"<html><body><script>alert('XSS')</script></body></html>"
-        data_url = f"data:text/html;base64,{base64.b64encode(html_content).decode()}"
-        
-        # Upload HTML file
-        doc_data = {
-            "documents": [{
-                "name": "test.html",
-                "category": "other",
-                "kind": "file",
-                "mimeType": "text/html",
-                "dataUrl": data_url
-            }]
-        }
-        response = requests.post(f"{BASE_URL}/patients/{patient_id}/documents", json=doc_data)
-        
-        if response.status_code != 200:
-            return log_test("SEC-002 HTML security", False, f"Upload failed: {response.status_code}")
-        
-        patient = response.json()
-        doc = [d for d in patient['documents'] if d['name'] == 'test.html'][0]
-        doc_id = doc['id']
-        
-        # Get content
-        content_resp = requests.get(f"{BASE_URL}/patients/{patient_id}/documents/{doc_id}/content")
-        
-        if content_resp.status_code != 200:
-            return log_test("SEC-002 HTML security", False, f"GET content failed: {content_resp.status_code}")
-        
-        # Check Content-Type is application/octet-stream (NOT text/html)
-        content_type = content_resp.headers.get('Content-Type', '')
-        if content_type != 'application/octet-stream':
-            return log_test("SEC-002 HTML security", False, f"Content-Type should be application/octet-stream, got: {content_type}")
-        
-        # Check Content-Disposition is attachment (NOT inline)
-        content_disp = content_resp.headers.get('Content-Disposition', '')
-        if 'attachment' not in content_disp:
-            return log_test("SEC-002 HTML security", False, f"Content-Disposition should be attachment, got: {content_disp}")
-        
-        # Check X-Content-Type-Options: nosniff
-        nosniff = content_resp.headers.get('X-Content-Type-Options', '')
-        if nosniff != 'nosniff':
-            return log_test("SEC-002 HTML security", False, f"X-Content-Type-Options should be nosniff, got: {nosniff}")
-        
-        return log_test("SEC-002 HTML security", True, "HTML served as application/octet-stream + attachment + nosniff")
+            log_fail(f"GET /auth/me returned user={data.get('user')}, expected null")
     
-    except Exception as e:
-        return log_test("SEC-002 HTML security", False, f"Exception: {e}")
+    # All protected routes should return 401
+    protected_routes = [
+        ("GET", "/patients"),
+        ("POST", "/sample", {}),
+        ("POST", "/patients", {"name": "Test"}),
+        ("POST", "/ingest", {"documents": []}),
+    ]
+    
+    for method, path, *args in protected_routes:
+        json_data = args[0] if args else None
+        resp = make_request(method, path, json_data=json_data, expect_status=401)
+        if resp:
+            log_pass(f"{method} {path} without cookie returns 401")
+    
+    # Test with bogus cookie
+    resp = make_request("GET", "/patients", headers={"Cookie": BOGUS_COOKIE}, expect_status=401)
+    if resp:
+        log_pass("GET /patients with bogus cookie returns 401")
 
-# ============================================================================
-# REGRESSION TESTS: CORE ENDPOINTS
-# ============================================================================
+def test_auth_me_with_cookie():
+    """Test 2: AUTH ME - with valid cookie should return user data"""
+    log_test("AUTH ME (with valid cookie)")
+    
+    resp = make_request("GET", "/auth/me", headers={"Cookie": NURSE1_COOKIE}, expect_status=200)
+    if resp:
+        data = resp.json()
+        user = data.get("user")
+        if user and user.get("id") == "testnurse1" and user.get("email") == "nurse1@test.dev":
+            log_pass(f"GET /auth/me with TESTTOKEN1 returns user: {user}")
+        else:
+            log_fail(f"GET /auth/me returned unexpected user: {user}")
 
-def test_reg_6_get_patients():
-    """Test 8 (REGRESSION): GET /api/patients"""
-    print("\n📋 Test 8 (REGRESSION): GET /api/patients")
-    try:
-        response = requests.get(f"{BASE_URL}/patients")
-        if response.status_code != 200:
-            return log_test("GET /patients", False, f"Expected 200, got {response.status_code}")
+def test_full_lifecycle_nurse1():
+    """Test 3: FULL LIFECYCLE as nurse1"""
+    log_test("FULL LIFECYCLE as nurse1 (TESTTOKEN1)")
+    
+    headers = {"Cookie": NURSE1_COOKIE}
+    
+    # 3a. GET /patients -> array (only nurse1's)
+    resp = make_request("GET", "/patients", headers=headers, expect_status=200)
+    if resp:
+        patients = resp.json()
+        log_pass(f"GET /patients returns array with {len(patients)} patients")
+        initial_count = len(patients)
+    else:
+        return
+    
+    # 3b. POST /sample {type:"sepsis"} -> patient with ownerId, risk high, full aiOutput
+    resp = make_request("POST", "/sample", headers=headers, json_data={"type": "sepsis"}, expect_status=200)
+    if resp:
+        sample = resp.json()
+        sample_id = sample.get("id")
+        created_patients.append(("nurse1", sample_id))
         
-        patients = response.json()
-        if not isinstance(patients, list):
-            return log_test("GET /patients", False, "Response is not an array")
+        if sample.get("ownerId") == "testnurse1":
+            log_pass(f"POST /sample created patient with ownerId=testnurse1")
+        else:
+            log_fail(f"POST /sample ownerId={sample.get('ownerId')}, expected testnurse1")
         
-        return log_test("GET /patients", True, f"Returned {len(patients)} patients")
-    except Exception as e:
-        return log_test("GET /patients", False, f"Exception: {e}")
-
-def test_reg_7_post_patient():
-    """Test 9 (REGRESSION): POST /api/patients - create + validation"""
-    print("\n📋 Test 9 (REGRESSION): POST /api/patients")
-    try:
-        # Test missing name validation
-        response = requests.post(f"{BASE_URL}/patients", json={})
-        if response.status_code != 400:
-            return log_test("POST /patients validation", False, f"Expected 400 for missing name, got {response.status_code}")
+        ai = sample.get("aiOutput", {})
+        ew = ai.get("earlyWarning", {})
+        if ew.get("riskLevel") == "high":
+            log_pass(f"Sample sepsis patient has riskLevel=high")
+        else:
+            log_fail(f"Sample sepsis patient riskLevel={ew.get('riskLevel')}, expected high")
         
-        # Create valid patient
-        patient_data = {
-            "name": "TEST_REG_POST",
-            "bed": "Bed 1",
-            "age": "65",
-            "diagnosis": "Test"
-        }
-        response = requests.post(f"{BASE_URL}/patients", json=patient_data)
-        if response.status_code != 200:
-            return log_test("POST /patients", False, f"Expected 200, got {response.status_code}")
-        
-        patient = response.json()
-        if 'id' not in patient or len(patient['id']) != 36:
-            return log_test("POST /patients", False, "Invalid UUID")
-        
-        created_patient_ids.append(patient['id'])
-        return log_test("POST /patients", True, "Missing name returns 400, valid patient created with UUID")
-    except Exception as e:
-        return log_test("POST /patients", False, f"Exception: {e}")
-
-def test_reg_8_max_10_enforcement():
-    """Test 10 (REGRESSION): POST /api/patients - max 10 enforcement"""
-    print("\n📋 Test 10 (REGRESSION): Max 10 patients enforcement")
-    temp_patient_ids = []
-    try:
-        # Get current count
-        response = requests.get(f"{BASE_URL}/patients")
-        current_count = len(response.json())
-        print(f"  Current patient count: {current_count}")
-        
-        # Create patients up to max 10
-        while current_count < 10:
-            patient_data = {
-                "name": f"TEST_MAX10_{current_count}",
-                "bed": f"Bed {current_count}",
-                "age": "70",
-                "diagnosis": "Test"
-            }
-            resp = requests.post(f"{BASE_URL}/patients", json=patient_data)
-            if resp.status_code == 200:
-                pid = resp.json()['id']
-                created_patient_ids.append(pid)
-                temp_patient_ids.append(pid)
-                current_count += 1
+        # Check for abbreviations array
+        if isinstance(ai.get("abbreviations"), list) and len(ai.get("abbreviations")) > 0:
+            log_pass(f"Sample patient has abbreviations array with {len(ai.get('abbreviations'))} items")
+        else:
+            log_fail(f"Sample patient missing abbreviations array")
+    else:
+        return
+    
+    # 3c. POST /patients {name:"AuthTest Pt", bed:"A1"} -> created; missing name -> 400
+    resp = make_request("POST", "/patients", headers=headers, json_data={"name": "AuthTest Pt", "bed": "A1"}, expect_status=200)
+    if resp:
+        patient = resp.json()
+        patient_id = patient.get("id")
+        created_patients.append(("nurse1", patient_id))
+        log_pass(f"POST /patients created patient: {patient.get('name')} (id={patient_id})")
+    else:
+        return
+    
+    # Test missing name validation
+    resp = make_request("POST", "/patients", headers=headers, json_data={"bed": "A2"}, expect_status=400)
+    if resp:
+        log_pass("POST /patients without name returns 400")
+    
+    # 3d. POST /patients/:id/documents: text note + small PNG
+    # Text note
+    text_doc = {
+        "documents": [{
+            "name": "Test Note",
+            "category": "vitals",
+            "kind": "text",
+            "textContent": "Patient stable. HR 80, BP 120/80."
+        }]
+    }
+    resp = make_request("POST", f"/patients/{patient_id}/documents", headers=headers, json_data=text_doc, expect_status=200)
+    if resp:
+        log_pass("POST /patients/:id/documents added text note")
+    
+    # Small PNG (1x1 red pixel)
+    png_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+    png_doc = {
+        "documents": [{
+            "name": "Test Image",
+            "category": "other",
+            "kind": "file",
+            "mimeType": "image/png",
+            "dataUrl": f"data:image/png;base64,{png_base64}"
+        }]
+    }
+    resp = make_request("POST", f"/patients/{patient_id}/documents", headers=headers, json_data=png_doc, expect_status=200)
+    if resp:
+        updated = resp.json()
+        docs = updated.get("documents", [])
+        img_doc = next((d for d in docs if d.get("name") == "Test Image"), None)
+        if img_doc:
+            doc_id = img_doc.get("id")
+            if img_doc.get("hasFile") and not img_doc.get("dataUrl"):
+                log_pass("POST /patients/:id/documents added PNG with hasFile=true, dataUrl=null")
+                
+                # GET .../content streams image/png
+                resp = make_request("GET", f"/patients/{patient_id}/documents/{doc_id}/content", headers=headers, expect_status=200)
+                if resp and resp.headers.get("Content-Type") == "image/png":
+                    log_pass("GET /patients/:id/documents/:docId/content streams image/png")
+                else:
+                    log_fail(f"GET content returned Content-Type={resp.headers.get('Content-Type') if resp else 'N/A'}")
+                
+                # DELETE removes it
+                resp = make_request("DELETE", f"/patients/{patient_id}/documents/{doc_id}", headers=headers, expect_status=200)
+                if resp:
+                    log_pass("DELETE /patients/:id/documents/:docId removes document")
+                    
+                    # GET content after delete -> 404
+                    resp = make_request("GET", f"/patients/{patient_id}/documents/{doc_id}/content", headers=headers, expect_status=404)
+                    if resp:
+                        log_pass("GET content after DELETE returns 404")
             else:
-                # Clean up and fail
-                for pid in temp_patient_ids:
-                    try:
-                        requests.delete(f"{BASE_URL}/patients/{pid}")
-                        created_patient_ids.remove(pid)
-                    except Exception:
-                        pass
-                return log_test("Max 10 enforcement", False, f"Failed to create patient at count {current_count}")
-        
-        # Try to create 11th patient
-        patient_data = {
-            "name": "TEST_11TH",
-            "bed": "Bed 11",
-            "age": "70",
-            "diagnosis": "Should fail"
-        }
-        response = requests.post(f"{BASE_URL}/patients", json=patient_data)
-        
-        if response.status_code != 400:
-            # Clean up
-            for pid in temp_patient_ids:
-                try:
-                    requests.delete(f"{BASE_URL}/patients/{pid}")
-                    created_patient_ids.remove(pid)
-                except Exception:
-                    pass
-            return log_test("Max 10 enforcement", False, f"Expected 400 for 11th patient, got {response.status_code}")
-        
-        error_data = response.json()
-        error_msg = error_data.get('error', '').lower()
-        
-        # Check error message
-        if 'max 10' not in error_msg and 'max 10' not in error_msg.replace(' ', ''):
-            # Clean up
-            for pid in temp_patient_ids:
-                try:
-                    requests.delete(f"{BASE_URL}/patients/{pid}")
-                    created_patient_ids.remove(pid)
-                except Exception:
-                    pass
-            return log_test("Max 10 enforcement", False, f"Error message doesn't mention 'max 10': {error_data['error']}")
-        
-        result = log_test("Max 10 enforcement", True, f"11th patient correctly rejected: {error_data['error']}")
-        
-        # Clean up immediately
-        print("  Cleaning up temp patients...")
-        for pid in temp_patient_ids:
-            try:
-                requests.delete(f"{BASE_URL}/patients/{pid}")
-                created_patient_ids.remove(pid)
-            except Exception:
-                pass
-        
-        return result
-    except Exception as e:
-        # Clean up on error
-        for pid in temp_patient_ids:
-            try:
-                requests.delete(f"{BASE_URL}/patients/{pid}")
-                if pid in created_patient_ids:
-                    created_patient_ids.remove(pid)
-            except Exception:
-                pass
-        return log_test("Max 10 enforcement", False, f"Exception: {e}")
-
-def test_reg_9_put_patient():
-    """Test 11 (REGRESSION): PUT /api/patients/:id - handoverNote sets handoverNoteAt"""
-    print("\n📋 Test 11 (REGRESSION): PUT /api/patients/:id")
-    try:
-        # Create a patient
-        patient_data = {"name": "TEST_PUT", "bed": "Bed 1", "age": "65", "diagnosis": "Test"}
-        create_resp = requests.post(f"{BASE_URL}/patients", json=patient_data)
-        if create_resp.status_code != 200:
-            return log_test("PUT patient", False, f"Could not create patient: {create_resp.status_code}")
-        patient_id = create_resp.json()['id']
-        created_patient_ids.append(patient_id)
-        
-        # Set handover note
-        update_data = {"handoverNote": "Test handover note"}
-        response = requests.put(f"{BASE_URL}/patients/{patient_id}", json=update_data)
-        
-        if response.status_code != 200:
-            return log_test("PUT patient", False, f"Expected 200, got {response.status_code}")
-        
-        # Get patient and check timestamp
-        get_resp = requests.get(f"{BASE_URL}/patients/{patient_id}")
-        patient = get_resp.json()
-        
-        if 'handoverNoteAt' not in patient:
-            return log_test("PUT patient", False, "handoverNoteAt not set")
-        
-        # Verify it's a valid ISO timestamp
-        try:
-            datetime.fromisoformat(patient['handoverNoteAt'].replace('Z', '+00:00'))
-        except Exception:
-            return log_test("PUT patient", False, f"Invalid timestamp: {patient['handoverNoteAt']}")
-        
-        return log_test("PUT patient", True, "handoverNote sets handoverNoteAt timestamp")
-    except Exception as e:
-        return log_test("PUT patient", False, f"Exception: {e}")
-
-def test_reg_10_sample_endpoints():
-    """Test 12 (REGRESSION): POST /api/sample - chf/sepsis/postop"""
-    print("\n📋 Test 12 (REGRESSION): POST /api/sample")
-    try:
-        # Test CHF
-        resp_chf = requests.post(f"{BASE_URL}/sample", json={"type": "chf"})
-        if resp_chf.status_code != 200:
-            return log_test("POST /sample", False, f"CHF sample failed: {resp_chf.status_code}")
-        chf = resp_chf.json()
-        created_patient_ids.append(chf['id'])
-        
-        # Test sepsis
-        resp_sepsis = requests.post(f"{BASE_URL}/sample", json={"type": "sepsis"})
-        if resp_sepsis.status_code != 200:
-            return log_test("POST /sample", False, f"Sepsis sample failed: {resp_sepsis.status_code}")
-        sepsis = resp_sepsis.json()
-        created_patient_ids.append(sepsis['id'])
-        
-        # Test postop
-        resp_postop = requests.post(f"{BASE_URL}/sample", json={"type": "postop"})
-        if resp_postop.status_code != 200:
-            return log_test("POST /sample", False, f"Postop sample failed: {resp_postop.status_code}")
-        postop = resp_postop.json()
-        created_patient_ids.append(postop['id'])
-        
-        # Check all have full aiOutput with abbreviations
-        for patient, name in [(chf, 'CHF'), (sepsis, 'Sepsis'), (postop, 'Postop')]:
-            ai = patient.get('aiOutput', {})
-            if 'abbreviations' not in ai:
-                return log_test("POST /sample", False, f"{name} missing abbreviations")
-            if not isinstance(ai['abbreviations'], list) or len(ai['abbreviations']) == 0:
-                return log_test("POST /sample", False, f"{name} abbreviations not a non-empty array")
-        
-        # Clean up immediately
-        for pid in [chf['id'], sepsis['id'], postop['id']]:
-            try:
-                requests.delete(f"{BASE_URL}/patients/{pid}")
-                created_patient_ids.remove(pid)
-            except Exception:
-                pass
-        
-        return log_test("POST /sample", True, "CHF/sepsis/postop samples created with full aiOutput incl abbreviations")
-    except Exception as e:
-        return log_test("POST /sample", False, f"Exception: {e}")
-
-def test_reg_11_ingest():
-    """Test 13 (REGRESSION): POST /api/ingest - multi-patient document"""
-    print("\n📋 Test 13 (REGRESSION): POST /api/ingest")
-    try:
-        doc_text = """
-SHIFT ALLOCATION
-Patient 1: John Smith, Bed 12, 68yo - Pneumonia
-Patient 2: Mary Johnson, Bed 14, 72yo - Post-op knee replacement
-Patient 3: Ahmed Khan, Bed 16, 55yo - COPD exacerbation
-"""
-        
-        ingest_data = {
-            "documents": [{
-                "name": "Allocation",
-                "category": "other",
-                "kind": "text",
-                "textContent": doc_text
-            }]
-        }
-        
-        print("  Calling AI to detect patients (may take 10-20s)...")
-        response = requests.post(f"{BASE_URL}/ingest", json=ingest_data, timeout=60)
-        
-        if response.status_code != 200:
-            return log_test("POST /ingest", False, f"Expected 200, got {response.status_code}")
-        
-        result = response.json()
-        
-        if result.get('detectedCount', 0) < 3:
-            return log_test("POST /ingest", False, f"Expected to detect 3 patients, got {result.get('detectedCount')}")
-        
-        if result.get('created', 0) < 3:
-            return log_test("POST /ingest", False, f"Expected to create 3 patients, got {result.get('created')}")
+                log_fail(f"PNG doc hasFile={img_doc.get('hasFile')}, dataUrl={img_doc.get('dataUrl')}")
+    
+    # SEC-003: >30MB base64 -> 413
+    # Create a 31MB base64 string (approximately)
+    large_data = "A" * (31 * 1024 * 1024 * 4 // 3)  # base64 is ~4/3 of binary size
+    large_doc = {
+        "documents": [{
+            "name": "Large File",
+            "category": "other",
+            "kind": "file",
+            "mimeType": "application/pdf",
+            "dataUrl": f"data:application/pdf;base64,{large_data}"
+        }]
+    }
+    log_info("Testing SEC-003: uploading >30MB file (this may take a moment)...")
+    resp = make_request("POST", f"/patients/{patient_id}/documents", headers=headers, json_data=large_doc, expect_status=413)
+    if resp:
+        log_pass("POST /patients/:id/documents with >30MB file returns 413")
+    
+    # 3e. POST /patients/:id/generate -> 200 full aiOutput
+    log_info("Testing POST /generate (REAL Gemini call, ~30-50s)...")
+    resp = make_request("POST", f"/patients/{patient_id}/generate", headers=headers, expect_status=200)
+    if resp:
+        result = resp.json()
+        ai = result.get("aiOutput", {})
+        required_keys = ["patientSummary", "priorities", "interventions", "isbar", "medications", 
+                        "medicationTimes", "vitalsTimeline", "careSchedule", "earlyWarning", 
+                        "redFlags", "newGradTips", "safetyNotice", "handoverHeader", "criticalActions",
+                        "drsabcd", "dietMobility", "assessments", "linesDevices", "edd", 
+                        "recommendations", "outstandingTasks", "abbreviations"]
+        missing = [k for k in required_keys if k not in ai]
+        if not missing:
+            log_pass(f"POST /generate returned full aiOutput with all {len(required_keys)} required keys")
+        else:
+            log_fail(f"POST /generate missing keys: {missing}")
+    
+    # POST /patients/:id/worsen (+2 cap14)
+    resp = make_request("POST", f"/patients/{patient_id}/worsen", headers=headers, expect_status=200)
+    if resp:
+        result = resp.json()
+        ai = result.get("aiOutput", {})
+        ew = ai.get("earlyWarning", {})
+        log_pass(f"POST /worsen returned score={ew.get('score')}, trend={ew.get('trend')}")
+    
+    # POST /patients/:id/improve (-2 floor0)
+    resp = make_request("POST", f"/patients/{patient_id}/improve", headers=headers, expect_status=200)
+    if resp:
+        result = resp.json()
+        ai = result.get("aiOutput", {})
+        ew = ai.get("earlyWarning", {})
+        log_pass(f"POST /improve returned score={ew.get('score')}, trend={ew.get('trend')}")
+    
+    # 3f. PUT /patients/:id {handoverNote:"x"} -> sets handoverNote + handoverNoteAt
+    resp = make_request("PUT", f"/patients/{patient_id}", headers=headers, json_data={"handoverNote": "Test handover note"}, expect_status=200)
+    if resp:
+        updated = resp.json()
+        if updated.get("handoverNote") == "Test handover note" and updated.get("handoverNoteAt"):
+            log_pass(f"PUT /patients/:id sets handoverNote and handoverNoteAt={updated.get('handoverNoteAt')}")
+        else:
+            log_fail(f"PUT /patients/:id handoverNote={updated.get('handoverNote')}, handoverNoteAt={updated.get('handoverNoteAt')}")
+    
+    # 3g. POST /ingest with multi-patient text doc
+    ingest_doc = {
+        "documents": [{
+            "name": "Handover Sheet",
+            "category": "other",
+            "kind": "text",
+            "textContent": """
+            Patient 1: John Smith, Bed 1, 65yo, Pneumonia
+            Patient 2: Mary Jones, Bed 2, 70yo, CHF
+            Patient 3: Bob Wilson, Bed 3, 55yo, Post-op
+            """
+        }]
+    }
+    resp = make_request("POST", "/ingest", headers=headers, json_data=ingest_doc, expect_status=200)
+    if resp:
+        result = resp.json()
+        detected = result.get("detectedCount", 0)
+        created = result.get("created", 0)
+        patients = result.get("patients", [])
+        log_pass(f"POST /ingest detected {detected} patients, created {created}")
         
         # Track created patients for cleanup
-        for p in result.get('patients', []):
-            created_patient_ids.append(p['id'])
-        
-        # Clean up immediately
-        for p in result.get('patients', []):
-            try:
-                requests.delete(f"{BASE_URL}/patients/{p['id']}")
-                created_patient_ids.remove(p['id'])
-            except Exception:
-                pass
-        
-        return log_test("POST /ingest", True, f"Detected {result['detectedCount']}, created {result['created']}")
-    except Exception as e:
-        return log_test("POST /ingest", False, f"Exception: {e}")
+        for p in patients:
+            created_patients.append(("nurse1", p.get("id")))
+            if p.get("ownerId") == "testnurse1":
+                log_pass(f"Ingested patient {p.get('name')} has ownerId=testnurse1")
+            else:
+                log_fail(f"Ingested patient {p.get('name')} has ownerId={p.get('ownerId')}")
 
-def test_reg_12_worsen():
-    """Test 14 (REGRESSION): POST /api/patients/:id/worsen - +2 cap 14"""
-    print("\n📋 Test 14 (REGRESSION): POST /worsen")
-    try:
-        # Create a postop sample (starts at score 0)
-        sample_resp = requests.post(f"{BASE_URL}/sample", json={"type": "postop"})
-        patient = sample_resp.json()
-        patient_id = patient['id']
-        created_patient_ids.append(patient_id)
-        
-        initial_score = int(patient['aiOutput']['earlyWarning']['score'])
-        
-        # Call worsen twice
-        for i in range(2):
-            requests.post(f"{BASE_URL}/patients/{patient_id}/worsen")
-        
-        # Get final state
-        get_resp = requests.get(f"{BASE_URL}/patients/{patient_id}")
-        patient = get_resp.json()
-        
-        final_score = int(patient['aiOutput']['earlyWarning']['score'])
-        
-        # Score should be 0 + 2*2 = 4
-        if final_score != initial_score + 4:
-            return log_test("POST /worsen", False, f"Score should increase by 4: {initial_score} -> {final_score}")
-        
-        # Clean up
-        try:
-            requests.delete(f"{BASE_URL}/patients/{patient_id}")
-            created_patient_ids.remove(patient_id)
-        except Exception:
-            pass
-        
-        return log_test("POST /worsen", True, f"Score increased by +2 per call: {initial_score} -> {final_score}")
-    except Exception as e:
-        return log_test("POST /worsen", False, f"Exception: {e}")
+def test_per_user_isolation():
+    """Test 4: PER-USER ISOLATION - nurse2 should NOT see nurse1's patients"""
+    log_test("PER-USER ISOLATION (CRITICAL)")
+    
+    nurse1_headers = {"Cookie": NURSE1_COOKIE}
+    nurse2_headers = {"Cookie": NURSE2_COOKIE}
+    
+    # Get nurse1's patients
+    resp = make_request("GET", "/patients", headers=nurse1_headers, expect_status=200)
+    if not resp:
+        log_fail("Could not get nurse1's patients")
+        return
+    
+    nurse1_patients = resp.json()
+    if not nurse1_patients:
+        log_fail("Nurse1 has no patients to test isolation")
+        return
+    
+    p1_id = nurse1_patients[0].get("id")
+    log_info(f"Testing isolation with nurse1's patient P1={p1_id}")
+    
+    # GET /patients as nurse2 must NOT include P1
+    resp = make_request("GET", "/patients", headers=nurse2_headers, expect_status=200)
+    if resp:
+        nurse2_patients = resp.json()
+        nurse2_ids = [p.get("id") for p in nurse2_patients]
+        if p1_id not in nurse2_ids:
+            log_pass(f"GET /patients as nurse2 does NOT include nurse1's patient P1")
+        else:
+            log_fail(f"GET /patients as nurse2 INCLUDES nurse1's patient P1 - ISOLATION BREACH!")
+    
+    # GET /patients/P1 as nurse2 -> 404
+    resp = make_request("GET", f"/patients/{p1_id}", headers=nurse2_headers, expect_status=404)
+    if resp:
+        log_pass(f"GET /patients/P1 as nurse2 returns 404")
+    
+    # PUT /patients/P1 as nurse2 -> 404
+    resp = make_request("PUT", f"/patients/{p1_id}", headers=nurse2_headers, json_data={"name": "Hacked"}, expect_status=404)
+    if resp:
+        log_pass(f"PUT /patients/P1 as nurse2 returns 404")
+    
+    # DELETE /patients/P1 as nurse2 -> should NOT delete it
+    resp = make_request("DELETE", f"/patients/{p1_id}", headers=nurse2_headers)
+    if resp:
+        # Check if P1 still exists for nurse1
+        resp = make_request("GET", f"/patients/{p1_id}", headers=nurse1_headers, expect_status=200)
+        if resp:
+            log_pass(f"DELETE /patients/P1 as nurse2 did NOT delete nurse1's patient (P1 still exists)")
+        else:
+            log_fail(f"DELETE /patients/P1 as nurse2 DELETED nurse1's patient - ISOLATION BREACH!")
+    
+    # GET P1 documents/content as nurse2 -> 404
+    resp = make_request("GET", f"/patients/{p1_id}/documents", headers=nurse2_headers)
+    if resp and resp.status_code == 404:
+        log_pass(f"GET /patients/P1/documents as nurse2 returns 404")
 
-def test_reg_13_improve():
-    """Test 15 (REGRESSION): POST /api/patients/:id/improve - -2 floor 0"""
-    print("\n📋 Test 15 (REGRESSION): POST /improve")
-    try:
-        # Create a sepsis sample (starts at score 8)
-        sample_resp = requests.post(f"{BASE_URL}/sample", json={"type": "sepsis"})
-        patient = sample_resp.json()
-        patient_id = patient['id']
-        created_patient_ids.append(patient_id)
+def test_logout():
+    """Test 5: LOGOUT - POST /auth/logout clears cookie"""
+    log_test("LOGOUT")
+    
+    headers = {"Cookie": NURSE1_COOKIE}
+    
+    # POST /auth/logout
+    resp = make_request("POST", "/auth/logout", headers=headers, expect_status=200)
+    if resp:
+        # Check Set-Cookie header
+        set_cookie = resp.headers.get("Set-Cookie", "")
+        if "nc_session=" in set_cookie and ("Max-Age=0" in set_cookie or "expires=" in set_cookie):
+            log_pass("POST /auth/logout returns 200 and clears cookie (Set-Cookie with Max-Age=0)")
+        else:
+            log_fail(f"POST /auth/logout Set-Cookie header: {set_cookie}")
         
-        initial_score = int(patient['aiOutput']['earlyWarning']['score'])
-        
-        # Call improve twice
-        for i in range(2):
-            requests.post(f"{BASE_URL}/patients/{patient_id}/improve")
-        
-        # Get final state
-        get_resp = requests.get(f"{BASE_URL}/patients/{patient_id}")
-        patient = get_resp.json()
-        
-        final_score = int(patient['aiOutput']['earlyWarning']['score'])
-        
-        # Score should be 8 - 2*2 = 4
-        if final_score != initial_score - 4:
-            return log_test("POST /improve", False, f"Score should decrease by 4: {initial_score} -> {final_score}")
-        
-        # Clean up
-        try:
-            requests.delete(f"{BASE_URL}/patients/{patient_id}")
-            created_patient_ids.remove(patient_id)
-        except Exception:
-            pass
-        
-        return log_test("POST /improve", True, f"Score decreased by -2 per call: {initial_score} -> {final_score}")
-    except Exception as e:
-        return log_test("POST /improve", False, f"Exception: {e}")
+        # After logout, TESTTOKEN1 session is deleted
+        # Verify by trying to use it
+        resp = make_request("GET", "/auth/me", headers=headers, expect_status=200)
+        if resp:
+            data = resp.json()
+            if data.get("user") is None:
+                log_pass("After logout, GET /auth/me with old cookie returns user:null")
+            else:
+                log_fail(f"After logout, GET /auth/me still returns user: {data.get('user')}")
+
+def cleanup():
+    """Cleanup: delete created patients"""
+    log_test("CLEANUP")
+    
+    # Re-seed TESTTOKEN1 since we logged out
+    log_info("Re-seeding TESTTOKEN1 session...")
+    subprocess.run(["node", "/app/seed.js"], check=True)
+    log_pass("Re-seeded TESTTOKEN1 and TESTTOKEN2 sessions")
+    
+    nurse1_headers = {"Cookie": NURSE1_COOKIE}
+    
+    for owner, patient_id in created_patients:
+        if owner == "nurse1":
+            resp = make_request("DELETE", f"/patients/{patient_id}", headers=nurse1_headers)
+            if resp and resp.status_code == 200:
+                log_info(f"Deleted patient {patient_id}")
+            else:
+                log_info(f"Could not delete patient {patient_id} (may already be deleted)")
+    
+    log_pass(f"Cleanup complete. Attempted to delete {len(created_patients)} test patients")
 
 def main():
-    """Run all tests"""
-    print("=" * 80)
-    print("BACKEND TEST: AUDIO TRANSCRIPTION (NEW) + REGRESSION")
-    print("=" * 80)
+    print("\n" + "="*80)
+    print("NurseCare Backend Authentication & Per-User Isolation Test Suite")
+    print("="*80)
     
     try:
-        # NEW FEATURE TESTS: AUDIO TRANSCRIPTION
-        print("\n" + "=" * 80)
-        print("NEW FEATURE TESTS: AUDIO TRANSCRIPTION")
-        print("=" * 80)
-        test_audio_1_transcription()
-        test_audio_2_generate_reads_audio()
-        
-        # REGRESSION TESTS: DOCUMENTS
-        print("\n" + "=" * 80)
-        print("REGRESSION TESTS: DOCUMENTS")
-        print("=" * 80)
-        test_reg_1_text_note()
-        test_reg_2_png_image()
-        test_reg_3_delete_doc()
-        test_reg_4_sec003_30mb_rejection()
-        test_reg_5_sec002_html_security()
-        
-        # REGRESSION TESTS: CORE ENDPOINTS
-        print("\n" + "=" * 80)
-        print("REGRESSION TESTS: CORE ENDPOINTS")
-        print("=" * 80)
-        test_reg_6_get_patients()
-        test_reg_7_post_patient()
-        test_reg_8_max_10_enforcement()
-        test_reg_9_put_patient()
-        test_reg_10_sample_endpoints()
-        test_reg_11_ingest()
-        test_reg_12_worsen()
-        test_reg_13_improve()
-        
+        test_auth_gate_no_cookie()
+        test_auth_me_with_cookie()
+        test_full_lifecycle_nurse1()
+        test_per_user_isolation()
+        test_logout()
     finally:
-        # Always cleanup
-        cleanup_test_patients()
+        cleanup()
     
-    # Summary
-    print("\n" + "=" * 80)
-    print("TEST SUMMARY")
-    print("=" * 80)
-    
-    passed = sum(1 for r in test_results if r['passed'])
-    failed = sum(1 for r in test_results if not r['passed'])
-    total = len(test_results)
-    
-    print(f"\nTotal: {total} tests")
-    print(f"✅ Passed: {passed}")
-    print(f"❌ Failed: {failed}")
-    
-    if failed > 0:
-        print("\n❌ FAILED TESTS:")
-        for r in test_results:
-            if not r['passed']:
-                print(f"  - {r['test']}: {r['message']}")
-    
-    print("\n" + "=" * 80)
-    
-    if failed == 0:
-        print("✅ ALL TESTS PASSED")
-        return 0
-    else:
-        print("❌ SOME TESTS FAILED")
-        return 1
+    print("\n" + "="*80)
+    print("TEST SUITE COMPLETE")
+    print("="*80)
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

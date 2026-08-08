@@ -4,6 +4,7 @@ import { connectToMongo, storeFile, readFile, deleteFile, dataUrlToBuffer } from
 import { identifyPatients, generateNursingCare, transcribeAudio } from '@/lib/server/ai'
 import { buildSamplePatient } from '@/lib/server/samples'
 import { MAX_PATIENTS } from '@/lib/server/constants'
+import { SESSION_COOKIE, sessionCookieOptions, exchangeEmergentSession, createSession, getUserFromRequest, destroySession, publicUser } from '@/lib/server/auth'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -37,9 +38,40 @@ async function handleRoute(request, { params }) {
       return json({ message: 'NurseCare API running' })
     }
 
+    // ---- Auth (public) ----
+    if (route === '/auth/exchange' && method === 'POST') {
+      const { session_id } = await request.json().catch(() => ({}))
+      if (!session_id) return json({ error: 'Missing session_id' }, 400)
+      try {
+        const emergent = await exchangeEmergentSession(session_id)
+        const { user, sessionToken } = await createSession(db, emergent)
+        const res = handleCORS(NextResponse.json({ user: publicUser(user) }))
+        res.cookies.set(SESSION_COOKIE, sessionToken, sessionCookieOptions())
+        return res
+      } catch (e) {
+        console.error('auth exchange', e.message)
+        return json({ error: 'Login failed — please try signing in again.' }, 401)
+      }
+    }
+    if (route === '/auth/logout' && method === 'POST') {
+      await destroySession(request, db)
+      const res = handleCORS(NextResponse.json({ ok: true }))
+      res.cookies.set(SESSION_COOKIE, '', { ...sessionCookieOptions(), maxAge: 0, expires: new Date(0) })
+      return res
+    }
+    if (route === '/auth/me' && method === 'GET') {
+      const u = await getUserFromRequest(request, db)
+      return json({ user: publicUser(u) })
+    }
+
+    // ---- Everything below requires a signed-in nurse (per-user data isolation) ----
+    const user = await getUserFromRequest(request, db)
+    if (!user) return json({ error: 'Unauthorized' }, 401)
+    const ownerId = user.id
+
     // ---- Patients collection ----
     if (route === '/patients' && method === 'GET') {
-      const patients = await db.collection('patients').find({}).sort({ createdAt: 1 }).toArray()
+      const patients = await db.collection('patients').find({ ownerId }).sort({ createdAt: 1 }).toArray()
       return json(patients.map(({ _id, documents, ...rest }) => ({
         ...rest,
         documents: (documents || []).map((d) => ({ id: d.id, name: d.name, category: d.category, kind: d.kind, mimeType: d.mimeType })),
@@ -47,20 +79,21 @@ async function handleRoute(request, { params }) {
     }
 
     if (route === '/sample' && method === 'POST') {
-      const count = await db.collection('patients').countDocuments()
+      const count = await db.collection('patients').countDocuments({ ownerId })
       if (count >= MAX_PATIENTS) {
         return json({ error: `Patient load is full (max ${MAX_PATIENTS} patients). Discharge one first.` }, 400)
       }
       let sampleType = 'chf'
       try { const _b = await request.json(); if (_b && _b.type) sampleType = _b.type } catch {}
       const patient = buildSamplePatient(sampleType)
+      patient.ownerId = ownerId
       await db.collection('patients').insertOne(patient)
       const { _id, ...clean } = patient
       return json(clean)
     }
 
     if (route === '/patients' && method === 'POST') {
-      const count = await db.collection('patients').countDocuments()
+      const count = await db.collection('patients').countDocuments({ ownerId })
       if (count >= MAX_PATIENTS) {
         return json({ error: `Patient load is full (max ${MAX_PATIENTS} patients per shift). Discharge a patient to add a new one.` }, 400)
       }
@@ -70,6 +103,7 @@ async function handleRoute(request, { params }) {
       }
       const patient = {
         id: uuidv4(),
+        ownerId,
         name: body.name.trim(),
         bed: body.bed || '',
         age: body.age || '',
@@ -89,7 +123,7 @@ async function handleRoute(request, { params }) {
       const body = await request.json()
       const documents = Array.isArray(body.documents) ? body.documents : []
       if (!documents.length) return json({ error: 'No documents provided' }, 400)
-      const existing = await db.collection('patients').countDocuments()
+      const existing = await db.collection('patients').countDocuments({ ownerId })
       const slots = MAX_PATIENTS - existing
       if (slots <= 0) return json({ error: `Patient load is full (max ${MAX_PATIENTS} patients). Discharge a patient first.` }, 400)
 
@@ -121,6 +155,7 @@ async function handleRoute(request, { params }) {
         }
         const patient = {
           id: pid,
+          ownerId,
           name: d.name || 'Unnamed',
           bed: d.bed || '',
           age: d.age || '',
@@ -139,7 +174,7 @@ async function handleRoute(request, { params }) {
     }
     if (seg[0] === 'patients' && seg[1]) {
       const id = seg[1]
-      const patient = await db.collection('patients').findOne({ id })
+      const patient = await db.collection('patients').findOne({ id, ownerId })
       if (!patient && !(seg.length === 2 && method === 'DELETE')) {
         return json({ error: 'Patient not found' }, 404)
       }
@@ -170,8 +205,8 @@ async function handleRoute(request, { params }) {
           return json({ ...rest, documents: cleanDocs })
         }
         if (method === 'DELETE') {
-          for (const d of patient.documents || []) { if (d.kind !== 'text') { try { await deleteFile(db, d.id) } catch {} } }
-          await db.collection('patients').deleteOne({ id })
+          for (const d of (patient?.documents || [])) { if (d.kind !== 'text') { try { await deleteFile(db, d.id) } catch {} } }
+          await db.collection('patients').deleteOne({ id, ownerId })
           return json({ success: true })
         }
       }

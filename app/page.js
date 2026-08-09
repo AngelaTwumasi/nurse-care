@@ -27,7 +27,7 @@ import {
   CheckCircle2, FileUp, StickyNote, X, Download, Copy, Clock, TrendingUp,
   TrendingDown, Minus, Gauge, Siren, Volume2, Square, LayoutGrid,
   Dumbbell, Apple, UserRound, CalendarClock, GripVertical, Users, ArrowDownWideNarrow, Printer, Search, Camera, WifiOff, Pencil, Mic,
-  RefreshCw, CloudUpload, LogOut, Shield,
+  RefreshCw, CloudUpload, LogOut, Shield, Share2, Link2,
 } from 'lucide-react'
 import { flushQueue, queueCount, subscribeQueue, getAllOps, removeOp, clearQueue } from './offline-queue'
 import { Switch } from '@/components/ui/switch'
@@ -1582,7 +1582,14 @@ function NewObsDialog({ onSave }) {
 function HandoverNote({ value, savedAt, onSave }) {
   const [text, setText] = useState(value || '')
   const [saving, setSaving] = useState(false)
-  useEffect(() => { setText(value || '') }, [value])
+  const lastServerRef = useRef(value || '')
+  // Sync from server ONLY when the user hasn't made unsaved local edits.
+  // This prevents background live-sync refreshes from wiping what the nurse is typing.
+  useEffect(() => {
+    const incoming = value || ''
+    setText((cur) => (cur === lastServerRef.current ? incoming : cur))
+    lastServerRef.current = incoming
+  }, [value])
   const dirty = (text || '') !== (value || '')
   const save = async () => { setSaving(true); try { await onSave(text) } finally { setSaving(false) } }
   return (
@@ -1603,6 +1610,82 @@ function HandoverNote({ value, savedAt, onSave }) {
         </div>
       </CardContent>
     </Card>
+  )
+}
+
+function ShareHandoverDialog({ patient }) {
+  const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [link, setLink] = useState('')
+  const [copied, setCopied] = useState(false)
+  const [revoking, setRevoking] = useState(false)
+
+  const createLink = async () => {
+    setLoading(true)
+    try {
+      const res = await api(`/patients/${patient.id}/share`, { method: 'POST' })
+      const origin = typeof window !== 'undefined' ? window.location.origin : ''
+      setLink(`${origin}${res.path || `/shared/${res.shareToken}`}`)
+    } catch (e) { toast.error(e.message) } finally { setLoading(false) }
+  }
+
+  const onOpenChange = (v) => {
+    setOpen(v); setCopied(false)
+    if (v) { setLink(''); createLink() }
+  }
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(link)
+      setCopied(true); toast.success('Handover link copied')
+      setTimeout(() => setCopied(false), 2500)
+    } catch { toast.error('Could not copy — long-press to copy the link') }
+  }
+
+  const revoke = async () => {
+    setRevoking(true)
+    try {
+      await api(`/patients/${patient.id}/share`, { method: 'DELETE' })
+      toast.success('Share link revoked')
+      setOpen(false)
+    } catch (e) { toast.error(e.message) } finally { setRevoking(false) }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogTrigger asChild>
+        <Button variant="ghost" className="gap-2 text-muted-foreground hover:text-primary"><Share2 className="h-4 w-4" /> Share handover</Button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><Share2 className="h-5 w-5 text-primary" /> Share {patient.name}&apos;s handover</DialogTitle>
+          <DialogDescription>
+            A read-only link for a colleague covering your break — shows only this patient&apos;s ISBAR, priorities and handover note. It does not give access to the rest of your shift.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          {loading ? (
+            <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Creating secure link…</div>
+          ) : (
+            <>
+              <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2">
+                <Link2 className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <input readOnly value={link} className="flex-1 bg-transparent text-xs outline-none" onFocus={(e) => e.target.select()} />
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <Button variant="outline" size="sm" className="gap-2 text-destructive hover:text-destructive" onClick={revoke} disabled={revoking}>
+                  {revoking ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />} Revoke link
+                </Button>
+                <Button size="sm" className="gap-2" onClick={copy} disabled={!link}>
+                  {copied ? <CheckCircle2 className="h-4 w-4" /> : <Copy className="h-4 w-4" />} {copied ? 'Copied' : 'Copy link'}
+                </Button>
+              </div>
+              <p className="text-[11px] text-muted-foreground">Anyone with this link can view (not edit) the handover until you revoke it. Avoid posting identifiable patient data unless your workplace policy allows it.</p>
+            </>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -1835,6 +1918,7 @@ function PatientDetail({ patient, onBack, refresh, onDelete, patchDetail }) {
         <Button variant="ghost" onClick={onBack} className="gap-2 -ml-2 shrink-0"><ArrowLeft className="h-4 w-4" /> Back to shift</Button>
         <div className="flex items-center gap-2 shrink-0">
           <NewObsDialog onSave={saveObs} />
+          <ShareHandoverDialog patient={patient} />
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button variant="ghost" className="gap-2 text-muted-foreground hover:text-destructive"><Trash2 className="h-4 w-4" /> Discharge</Button>
@@ -2309,6 +2393,35 @@ function App() {
     return () => { unsub(); window.removeEventListener('online', onOnline) }
   }, [refreshPending, runSync])
 
+  // ---- Live data sync across users (public shared shift board) ----
+  // Since there is no login and everyone shares the same board, silently poll the
+  // server so changes made by other nurses (on other devices) show up live, without
+  // hard refreshes and without disrupting the current user's active edits.
+  const [live, setLive] = useState(true)
+  useEffect(() => {
+    const POLL_MS = 15000
+    const tick = async () => {
+      if (typeof document !== 'undefined' && document.hidden) return
+      if (typeof navigator !== 'undefined' && !navigator.onLine) return
+      if (syncingRef.current) return // don't fight an in-flight offline flush
+      try {
+        await load()
+        if (selectedIdRef.current) await loadDetail(selectedIdRef.current)
+      } catch { /* transient — will retry next tick */ }
+    }
+    const timer = setInterval(tick, POLL_MS)
+    // Refresh immediately when the nurse returns to the tab/app.
+    const onVisible = () => { if (!document.hidden) tick() }
+    const onFocus = () => tick()
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onFocus)
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [load, loadDetail])
+
 
   useEffect(() => {
     if (typeof window !== 'undefined' && !localStorage.getItem('nursecare_seen_tutorial')) {
@@ -2572,8 +2685,19 @@ function App() {
                   <ArrowLeft className="h-5 w-5" />
                 </Button>
                 <div>
-                  <h2 className="text-2xl font-bold tracking-tight">Your shift</h2>
-                  <p className="text-sm text-muted-foreground">{patients.length} of {MAX_PATIENTS} patients · tap a patient to manage documents & generate cares</p>
+                  <h2 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+                    Your shift
+                    {live && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700" title="This board auto-syncs across everyone using NurseCare">
+                        <span className="relative flex h-2 w-2">
+                          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-75" />
+                          <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+                        </span>
+                        Live
+                      </span>
+                    )}
+                  </h2>
+                  <p className="text-sm text-muted-foreground">{patients.length} of {MAX_PATIENTS} patients · auto-syncs across everyone on this board</p>
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">

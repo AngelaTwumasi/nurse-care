@@ -2365,3 +2365,56 @@ agent_communication:
       - Shared handover: POST/DELETE /patients/:id/share + public GET /shared/:token (read-only single-patient
         handover). Verified via curl. Frontend Share button + /shared/[token] page NOT yet built.
 
+
+#====================================================================================================
+# Live data sync across users (P0) + Shared Handover frontend UI (P1)
+#====================================================================================================
+
+frontend:
+  - task: "Live data sync across users (silent polling + tab-focus refresh)"
+    implemented: true
+    working: true
+    file: "/app/app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Since login was removed and everyone shares ONE public shift board, added live sync so changes by
+          other nurses/devices appear without a hard refresh. Implementation in page.js:
+          (1) setInterval poll every 15s that silently calls load() (+ loadDetail() if a patient is open).
+              Guards: skips when document.hidden, when offline, and when an offline-queue flush is in flight.
+          (2) visibilitychange + window focus listeners trigger an immediate refresh when the nurse returns.
+          (3) A green pulsing "Live" badge next to "Your shift" + subtext "auto-syncs across everyone on this board".
+          (4) HandoverNote guarded so a background refresh does NOT clobber unsaved local edits (syncs from server
+              only when the textarea still equals the last server value). Verified via screenshot; polling visible
+              in nextjs logs (repeated GET /api/patients ~15s). Frontend-only change.
+
+  - task: "Shared Handover UI (share button + public read-only /shared/[token] page)"
+    implemented: true
+    working: true
+    file: "/app/app/page.js, /app/app/shared/[token]/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Built the missing frontend for the pre-existing backend share endpoints (POST/DELETE /patients/:id/share,
+          GET /shared/:token). Added ShareHandoverDialog to the patient workspace header: opens -> POST /share to get
+          a token -> shows full link ({origin}/shared/:token) with Copy + Revoke. Created public client page
+          /app/app/shared/[token]/page.js that fetches /api/shared/:token and renders a read-only single-patient
+          handover (patient header + risk pill, deterioration watch, summary, critical actions, care priorities,
+          care schedule, ISBAR, outstanding tasks, recommendations) with an invalid/revoked error state. Verified
+          end-to-end via screenshots: dialog creates token, copies link, and the shared page renders correctly.
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Completed P0 (live data sync across users) and P1 (Shared Handover frontend UI). Both are FRONTEND-only
+      changes (share backend endpoints already existed). Verified working via screenshots (Live badge, share dialog
+      with copyable link, and the public /shared/[token] read-only page rendering the full handover). Awaiting user
+      decision on whether to run the automated frontend testing agent.

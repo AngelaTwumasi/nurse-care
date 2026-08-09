@@ -514,7 +514,7 @@ function VoiceHandoverButton({ onAudio, disabled, label = 'Voice handover' }) {
       setRecording(true)
       setElapsed(0)
       timerRef.current = setInterval(() => setElapsed((e) => e + 1), 1000)
-      toast('Recording… tap again to stop &amp; transcribe', { duration: 2500 })
+      toast('Recording… tap again to stop & transcribe', { duration: 2500 })
     } catch (e) {
       toast.error('Microphone permission denied or unavailable')
     }
@@ -582,10 +582,13 @@ function UploadPanel({ onUploadFiles, onAddNote, onAddDoc, onAudioDoc, busy, pro
         {progress && (
           <div className="space-y-1.5 rounded-lg border bg-accent/40 p-3">
             <div className="flex items-center justify-between text-xs">
-              <span className="flex items-center gap-1.5 truncate font-medium"><Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> Uploading {progress.name}</span>
-              <span className="tabular-nums text-muted-foreground">{progress.pct}%</span>
+              <span className="flex items-center gap-1.5 truncate font-medium"><Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> {progress.transcribing && progress.pct >= 100 ? 'Transcribing your recording…' : `Uploading ${progress.name}`}</span>
+              <span className="tabular-nums text-muted-foreground">{progress.transcribing && progress.pct >= 100 ? '' : `${progress.pct}%`}</span>
             </div>
             <Progress value={progress.pct} className="h-2" />
+            {progress.transcribing && progress.pct >= 100 && (
+              <p className="text-[11px] text-muted-foreground">This can take a few seconds — the AI is turning speech into text.</p>
+            )}
             {progress.index && progress.total > 1 && (
               <p className="text-[11px] text-muted-foreground">File {progress.index} of {progress.total}</p>
             )}
@@ -629,7 +632,7 @@ function DocumentList({ documents, onDelete, onOpen }) {
               <div className="rounded-md bg-accent p-2"><Icon className={`h-4 w-4 ${cat.color}`} /></div>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium hover:text-primary">{d.name}</p>
-                <p className="text-xs text-muted-foreground">{cat.label} · {d.kind === 'text' ? 'Note' : (d.mimeType === 'application/pdf' ? 'PDF' : 'Image')} · tap to open</p>
+                <p className="text-xs text-muted-foreground">{cat.label} · {d.kind === 'text' ? 'Note' : (d.mimeType === 'application/pdf' ? 'PDF' : (((d.mimeType || '').toLowerCase().startsWith('audio/') || (d.mimeType || '').toLowerCase() === 'video/mp4' || d.kind === 'audio' || /\.(mp3|m4a|wav|ogg|oga|opus|aac|flac|webm|aiff|aif|3gp|amr|wma|caf)$/i.test(d.name || '')) ? 'Recording' : 'Image'))} · tap to open</p>
               </div>
             </button>
             <Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground hover:text-destructive" onClick={() => onDelete(d.id)}>
@@ -646,13 +649,16 @@ function DocViewer({ open, onOpenChange, documents, currentIndex, setCurrentInde
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [saving, setSaving] = useState(false)
+  const [retrying, setRetrying] = useState(false)
   const d = documents[currentIndex]
   useEffect(() => { setEditing(false) }, [currentIndex, open])
   if (!d) return null
   const cat = CATEGORIES[d.category] || CATEGORIES.other
   const Icon = cat.icon
   const contentUrl = d.dataUrl || (patientId ? `/api/patients/${patientId}/documents/${d.id}/content` : null)
-  const isAudio = (d.mimeType && d.mimeType.startsWith('audio/')) || d.kind === 'audio'
+  const AUDIO_EXT_RE = /\.(mp3|m4a|mp4a|wav|wave|ogg|oga|opus|aac|flac|webm|aiff|aif|3gp|3gpp|amr|wma|caf)$/i
+  const mtL = (d.mimeType || '').toLowerCase()
+  const isAudio = mtL.startsWith('audio/') || mtL === 'video/mp4' || d.kind === 'audio' || AUDIO_EXT_RE.test(d.name || '')
   const saveTranscript = async () => {
     setSaving(true)
     try {
@@ -661,6 +667,15 @@ function DocViewer({ open, onOpenChange, documents, currentIndex, setCurrentInde
       setEditing(false)
       await refresh?.()
     } catch (e) { toast.error(e.message) } finally { setSaving(false) }
+  }
+  const retryTranscribe = async () => {
+    setRetrying(true)
+    const tid = toast.loading('Transcribing your recording…')
+    try {
+      await api(`/patients/${patientId}/documents/${d.id}/transcribe`, { method: 'POST' })
+      toast.success('Transcript ready — review it, then regenerate', { id: tid })
+      await refresh?.()
+    } catch (e) { toast.error(e.message, { id: tid }) } finally { setRetrying(false) }
   }
   let preview
   if (d.kind === 'text') {
@@ -675,8 +690,15 @@ function DocViewer({ open, onOpenChange, documents, currentIndex, setCurrentInde
         <div className="rounded-lg border bg-card p-4">
           <div className="mb-2 flex items-center justify-between gap-2">
             <span className="flex items-center gap-2 text-sm font-semibold"><FileText className="h-4 w-4 text-teal-600" /> AI transcript{d.transcriptEditedAt ? <span className="text-[10px] font-normal text-muted-foreground">(edited)</span> : null}</span>
-            {!editing && (d.transcript || d.textContent) && !d._pending && (
-              <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => { setDraft(d.transcript || d.textContent || ''); setEditing(true) }}><Pencil className="h-3 w-3" /> Edit</Button>
+            {!editing && !d._pending && (
+              <div className="flex items-center gap-1.5">
+                <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={retryTranscribe} disabled={retrying || !patientId}>
+                  {retrying ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />} Retry
+                </Button>
+                {(d.transcript || d.textContent) && (
+                  <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => { setDraft(d.transcript || d.textContent || ''); setEditing(true) }}><Pencil className="h-3 w-3" /> Edit</Button>
+                )}
+              </div>
             )}
           </div>
           {editing ? (
@@ -687,12 +709,14 @@ function DocViewer({ open, onOpenChange, documents, currentIndex, setCurrentInde
                 <Button size="sm" className="gap-1" onClick={saveTranscript} disabled={saving}>{saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} Save transcript</Button>
               </div>
             </div>
+          ) : retrying ? (
+            <p className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Transcribing your recording…</p>
           ) : d.transcript || d.textContent ? (
             <pre className="max-h-[40vh] overflow-auto whitespace-pre-wrap text-sm leading-relaxed text-foreground">{d.transcript || d.textContent}</pre>
           ) : d._pending ? (
             <p className="text-xs text-muted-foreground">Will transcribe automatically when you reconnect.</p>
           ) : (
-            <p className="text-xs text-muted-foreground">No transcript yet — regenerate the care plan, or the recording may have been silent/unclear.</p>
+            <p className="text-xs text-muted-foreground">No transcript yet — the recording may have been silent or unclear. Tap <span className="font-medium text-foreground">Retry</span> to transcribe again.</p>
           )}
         </div>
       </div>
@@ -1742,6 +1766,20 @@ function PatientDetail({ patient, onBack, refresh, onDelete, patchDetail }) {
     setViewerOpen(true)
   }
 
+  // Transcript Tidy Nudge: once a freshly-uploaded recording's transcript lands in the
+  // patient record, open its viewer so the nurse can review/tidy it before generating.
+  const [reviewDocId, setReviewDocId] = useState(null)
+  useEffect(() => {
+    if (!reviewDocId) return
+    const idx = (patient.documents || []).findIndex((x) => x.id === reviewDocId)
+    if (idx >= 0) {
+      setViewIndex(idx)
+      setViewerOpen(true)
+      toast('Review the transcript below, then Generate to read it into the care plan', { icon: '📝', duration: 6000 })
+      setReviewDocId(null)
+    }
+  }, [reviewDocId, patient.documents])
+
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const v = localStorage.getItem('nursecare_autorefresh')
@@ -1771,27 +1809,52 @@ function PatientDetail({ patient, onBack, refresh, onDelete, patchDetail }) {
 
   const uploadFiles = async (files, category) => {
     setBusy(true)
+    const AUDIO_RE = /\.(mp3|m4a|mp4a|wav|wave|ogg|oga|opus|aac|flac|webm|aiff|aif|3gp|3gpp|amr|wma|caf)$/i
+    let audioReviewId = null
+    let audioHadTranscript = false
     try {
       let uploaded = 0, queued = 0
       const valid = files.filter((f) => { if (f.size > 25 * 1024 * 1024) { toast.error(`${f.name} is too large (max 25MB)`); return false } return true })
       for (let i = 0; i < valid.length; i++) {
         const f = valid[i]
         const doc = await fileToDoc(f, category)
-        setUploadProgress({ name: f.name, pct: 0, index: i + 1, total: valid.length })
+        const isAudio = (f.type || '').toLowerCase().startsWith('audio/') || AUDIO_RE.test(f.name || '')
+        const tid = isAudio ? toast.loading(`Transcribing “${f.name}”…`) : null
+        setUploadProgress({ name: f.name, pct: 0, index: i + 1, total: valid.length, transcribing: isAudio })
         const res = await uploadDocument(
           patient.id,
           doc,
-          (pct) => setUploadProgress({ name: f.name, pct, index: i + 1, total: valid.length }),
+          (pct) => setUploadProgress({ name: f.name, pct, index: i + 1, total: valid.length, transcribing: isAudio }),
           { queueOnFail: true, label: `Upload “${f.name}” → ${patient.name}` }
         )
         if (res?._queued) {
           queued++
           patchDetail?.((prev) => ({ ...prev, documents: [...(prev.documents || []), { id: `local-${Date.now()}-${i}`, name: doc.name, category, kind: 'file', mimeType: doc.mimeType, hasFile: true, _pending: true }] }))
-        } else { uploaded++ }
+          if (tid) toast.success('Recording saved offline — will transcribe when you reconnect', { id: tid })
+        } else {
+          uploaded++
+          if (isAudio && Array.isArray(res?.documents)) {
+            const nd = res.documents.slice().reverse().find((x) => x.kind !== 'text')
+            if (nd) {
+              audioReviewId = nd.id
+              audioHadTranscript = !!(nd.transcript || nd.textContent)
+              if (tid) toast.success(audioHadTranscript ? 'Transcript ready — review it before generating' : 'Recording added, but no transcript yet — open it and tap Retry', { id: tid })
+            } else if (tid) { toast.success('Recording added', { id: tid }) }
+          } else if (tid) { toast.success('Recording added', { id: tid }) }
+        }
       }
       if (!uploaded && !queued) return
-      if (queued) toast.success(`${queued} document${queued > 1 ? 's' : ''} saved offline — will upload when you reconnect`)
-      if (uploaded) { toast.success(`${uploaded} document${uploaded > 1 ? 's' : ''} added`); await afterDocChange() }
+      if (queued && !audioReviewId) toast.success(`${queued} document${queued > 1 ? 's' : ''} saved offline — will upload when you reconnect`)
+      if (uploaded) {
+        await refresh()
+        if (audioReviewId) {
+          // Transcript Tidy Nudge — let the nurse review before it's read into the care plan.
+          setReviewDocId(audioReviewId)
+        } else {
+          toast.success(`${uploaded} document${uploaded > 1 ? 's' : ''} added`)
+          if (autoRef.current) await generate(true)
+        }
+      }
     } catch (e) { toast.error(e.message) } finally { setBusy(false); setUploadProgress(null) }
   }
 
@@ -1826,16 +1889,28 @@ function PatientDetail({ patient, onBack, refresh, onDelete, patchDetail }) {
 
   const addAudioDoc = async (doc) => {
     setBusy(true)
+    const tid = toast.loading('Transcribing your recording…')
     try {
       const res = await uploadDocument(patient.id, doc, undefined, { queueOnFail: true, label: `${doc.name || 'Voice recording'} → ${patient.name}` })
       if (res?._queued) {
         patchDetail?.((prev) => ({ ...prev, documents: [...(prev.documents || []), { id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, name: doc.name || 'Voice recording', category: doc.category || 'handover', kind: 'file', mimeType: doc.mimeType, hasFile: true, _pending: true }] }))
-        toast.success('Recording saved offline — will upload &amp; transcribe when you reconnect')
+        toast.success('Recording saved offline — will upload & transcribe when you reconnect', { id: tid })
       } else {
-        toast.success('Recording added — transcribing &amp; reading it into the care plan')
-        await afterDocChange()
+        await refresh()
+        // Find the recording we just uploaded so we can nudge the nurse to review its transcript.
+        const newDoc = (res?.documents || []).slice().reverse().find((x) => x.kind !== 'text')
+        const hasTranscript = newDoc && (newDoc.transcript || newDoc.textContent)
+        if (hasTranscript) {
+          toast.success('Transcript ready — review it before generating', { id: tid })
+          setReviewDocId(newDoc.id) // opens the viewer for a quick tidy (Transcript Tidy Nudge)
+        } else if (newDoc) {
+          toast('Recording added, but no transcript yet — open it and tap Retry', { id: tid, icon: '⚠️', duration: 6000 })
+          setReviewDocId(newDoc.id)
+        } else {
+          toast.success('Recording added', { id: tid })
+        }
       }
-    } catch (e) { toast.error(e.message) } finally { setBusy(false) }
+    } catch (e) { toast.error(e.message, { id: tid }) } finally { setBusy(false) }
   }
 
   const deleteDoc = async (docId) => {

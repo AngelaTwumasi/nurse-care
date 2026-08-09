@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from 'uuid'
 import { NextResponse } from 'next/server'
-import { connectToMongo, storeFile, readFile, deleteFile, dataUrlToBuffer } from '@/lib/server/db'
-import { identifyPatients, generateNursingCare, transcribeAudio } from '@/lib/server/ai'
+import { connectToMongo, storeFile, readFile, deleteFile, dataUrlToBuffer, resolveDocDataUrl } from '@/lib/server/db'
+import { identifyPatients, generateNursingCare, transcribeAudio, isAudioLike } from '@/lib/server/ai'
 import { buildSamplePatient } from '@/lib/server/samples'
 import { MAX_PATIENTS } from '@/lib/server/constants'
 import { SESSION_COOKIE, sessionCookieOptions, exchangeEmergentSession, createSession, getUserFromRequest, destroySession, publicUser } from '@/lib/server/auth'
@@ -288,7 +288,7 @@ async function handleRoute(request, { params }) {
             // Audio recordings (voice handover / dictated care plan): transcribe with Gemini so
             // the spoken content can be read in the viewer AND fed into the care plan.
             let transcript = null
-            const isAudio = (d.mimeType || '').toLowerCase().startsWith('audio/')
+            const isAudio = isAudioLike(d.name, d.mimeType)
             if (kind !== 'text' && isAudio && d.dataUrl) {
               try { transcript = await transcribeAudio(d.dataUrl) } catch (e) { console.error('transcribeAudio', e?.message) }
             }
@@ -329,6 +329,30 @@ async function handleRoute(request, { params }) {
           const updated = await db.collection('patients').findOne({ id })
           const { _id, documents, ...rest } = updated
           const cleanDocs = (documents || []).map(({ dataUrl, ...doc }) => ({ ...doc, hasFile: doc.hasFile || (doc.kind !== 'text' && !!dataUrl) }))
+          return json({ ...rest, documents: cleanDocs })
+        }
+        // POST .../documents/:docId/transcribe -> re-run transcription on a stored audio recording
+        if (seg.length === 5 && seg[4] === 'transcribe' && method === 'POST') {
+          const docId = seg[3]
+          const doc = (patient.documents || []).find((d) => d.id === docId)
+          if (!doc) return json({ error: 'Document not found' }, 404)
+          if (!isAudioLike(doc.name, doc.mimeType)) return json({ error: 'This document is not an audio recording.' }, 400)
+          let dataUrl
+          try { dataUrl = await resolveDocDataUrl(db, doc) } catch { dataUrl = null }
+          if (!dataUrl) return json({ error: 'The recording file could not be found.' }, 404)
+          let transcript = ''
+          try { transcript = await transcribeAudio(dataUrl) } catch (e) {
+            console.error('retry transcribe', e?.message)
+            return json({ error: 'Could not transcribe this recording. Please try again in a moment.' }, 502)
+          }
+          if (!transcript) return json({ error: 'No speech could be transcribed — the recording may be silent or unclear.' }, 422)
+          await db.collection('patients').updateOne(
+            { id, 'documents.id': docId },
+            { $set: { 'documents.$.transcript': transcript, 'documents.$.textContent': transcript, 'documents.$.transcribedAt': new Date(), 'documents.$.transcriptEditedAt': null } }
+          )
+          const updated = await db.collection('patients').findOne({ id })
+          const { _id, documents, ...rest } = updated
+          const cleanDocs = (documents || []).map(({ dataUrl: _du, ...doc2 }) => ({ ...doc2, hasFile: doc2.hasFile || (doc2.kind !== 'text' && !!_du) }))
           return json({ ...rest, documents: cleanDocs })
         }
         if (seg.length === 5 && seg[4] === 'content' && method === 'GET') {

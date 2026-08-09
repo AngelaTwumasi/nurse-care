@@ -2418,3 +2418,34 @@ agent_communication:
       changes (share backend endpoints already existed). Verified working via screenshots (Live badge, share dialog
       with copyable link, and the public /shared/[token] read-only page rendering the full handover). Awaiting user
       decision on whether to run the automated frontend testing agent.
+
+#====================================================================================================
+# BUG FIX: Audio transcription failing for uploaded/recorded voice documents (ffmpeg ENOENT)
+#====================================================================================================
+
+backend:
+  - task: "Audio transcription (uploaded + recorded voice) — ffmpeg path fix"
+    implemented: true
+    working: true
+    file: "/app/lib/server/ai.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: false
+        -agent: "main"
+        -comment: |
+          USER REPORTED audio transcript not working for uploaded recorded voice documents. Root cause found in
+          nextjs logs: `transcribeAudio spawn /app/.next/server/vendor-chunks/ffmpeg ENOENT`. resolveFfmpeg() was
+          returning the webpack-rewritten .next path (binary not there), so ffmpeg never ran and transcription
+          silently failed (caught + logged, transcript saved as null -> "No transcript yet"). (Earlier logs also
+          showed budget_exceeded 400s, but a fresh minimal gateway call now returns 200 — budget is fine again.)
+        -working: true
+        -agent: "main"
+        -comment: |
+          FIX: made resolveFfmpeg() bulletproof — it now prefers the real on-disk binary
+          process.cwd()/node_modules/ffmpeg-static/ffmpeg (existsSync check), falls back to ffmpegPathRaw only if
+          it exists and isn't a .next path, else 'ffmpeg' on PATH. VERIFIED end-to-end: generated a spoken clip with
+          espeak-ng -> converted to audio/webm(opus) -> POST /api/patients/:id/documents (8.2s) -> transcript
+          returned ACCURATELY: "Handover for bed four. Patient is a 68-year-old male with pneumonia. Oxygen
+          saturation is 92% on 2 litres. Please continue four-hourly observations and antibiotics." No ENOENT in logs.

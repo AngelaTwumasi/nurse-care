@@ -2505,3 +2505,27 @@ agent_communication:
       (transcribe feedback, tidy nudge, retry button) implemented; awaiting user decision on running the frontend
       testing agent. Recording flow: upload audio -> shows Transcribing… -> opens transcript for review -> nurse
       tidies/retries if needed -> then Generate reads it into the care plan.
+
+#====================================================================================================
+# ENHANCEMENTS: Handover document category + audio playback speed (1x/1.5x/2x)
+#====================================================================================================
+
+frontend:
+  - task: "Handover document category + recording playback speed control"
+    implemented: true
+    working: true
+    file: "/app/lib/nurse-utils.js, /app/app/page.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          (1) HANDOVER CATEGORY: added CATEGORIES.handover {label:'Handover', icon:Mic, color:text-primary} in
+          nurse-utils. VoiceHandoverButton already maps default careplan->'handover', so recordings now file under
+          'Handover' with a mic icon instead of falling back to 'Other Documents'. New category also selectable in
+          all category dropdowns. (2) PLAYBACK SPEED: DocViewer recording player now has 1x/1.5x/2x buttons that set
+          audio.playbackRate (via ref + onLoadedMetadata), reset to 1x when switching docs. VERIFIED via screenshot:
+          document list shows 'Handover · Recording' with mic icon; viewer shows Speed 1x/1.5x/2x controls; transcript
+          rendered ([beep] for the synthetic test tone).

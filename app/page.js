@@ -650,8 +650,11 @@ function DocViewer({ open, onOpenChange, documents, currentIndex, setCurrentInde
   const [draft, setDraft] = useState('')
   const [saving, setSaving] = useState(false)
   const [retrying, setRetrying] = useState(false)
+  const [speed, setSpeed] = useState(1)
+  const audioRef = useRef(null)
   const d = documents[currentIndex]
-  useEffect(() => { setEditing(false) }, [currentIndex, open])
+  useEffect(() => { setEditing(false); setSpeed(1) }, [currentIndex, open])
+  useEffect(() => { if (audioRef.current) audioRef.current.playbackRate = speed }, [speed])
   if (!d) return null
   const cat = CATEGORIES[d.category] || CATEGORIES.other
   const Icon = cat.icon
@@ -684,8 +687,18 @@ function DocViewer({ open, onOpenChange, documents, currentIndex, setCurrentInde
     preview = (
       <div className="space-y-3">
         <div className="rounded-lg border bg-muted/30 p-4">
-          <div className="mb-2 flex items-center gap-2 text-sm font-medium"><Mic className="h-4 w-4 text-primary" /> Recording</div>
-          {contentUrl ? <audio controls preload="none" src={contentUrl} className="w-full" /> : <p className="text-xs text-muted-foreground">Audio will be available once uploaded.</p>}
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-sm font-medium"><Mic className="h-4 w-4 text-primary" /> Recording</div>
+            {contentUrl && (
+              <div className="flex items-center gap-1">
+                <span className="mr-1 text-[11px] text-muted-foreground">Speed</span>
+                {[1, 1.5, 2].map((s) => (
+                  <Button key={s} variant={speed === s ? 'default' : 'outline'} size="sm" className="h-6 px-2 text-[11px]" onClick={() => setSpeed(s)}>{s}x</Button>
+                ))}
+              </div>
+            )}
+          </div>
+          {contentUrl ? <audio ref={audioRef} controls preload="none" src={contentUrl} className="w-full" onLoadedMetadata={(e) => { e.currentTarget.playbackRate = speed }} /> : <p className="text-xs text-muted-foreground">Audio will be available once uploaded.</p>}
         </div>
         <div className="rounded-lg border bg-card p-4">
           <div className="mb-2 flex items-center justify-between gap-2">
